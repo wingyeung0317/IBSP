@@ -1,0 +1,76 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: health-monitor-db
+    environment:
+      POSTGRES_USER: healthmonitor
+      POSTGRES_PASSWORD: healthpass123
+      POSTGRES_DB: health_monitoring
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - health-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U healthmonitor -d health_monitoring"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Node.js API Server
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: health-monitor-api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: healthmonitor
+      DB_PASSWORD: healthpass123
+      DB_NAME: health_monitoring
+      CORS_ORIGIN: http://localhost:5001
+    ports:
+      - "5000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - health-network
+    restart: unless-stopped
+    volumes:
+      - ./api:/app
+      - /app/node_modules
+
+  # React Dashboard
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: health-monitor-dashboard
+    environment:
+      REACT_APP_API_URL: http://localhost:5000
+      PORT: 3001
+    ports:
+      - "5001:3001"
+    depends_on:
+      - api
+    networks:
+      - health-network
+    restart: unless-stopped
+    volumes:
+      - /app/node_modules
+      - /app/build
+
+networks:
+  health-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
