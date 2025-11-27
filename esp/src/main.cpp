@@ -2449,6 +2449,10 @@ const unsigned long REALTIME_TX_INTERVAL = 60000;   // Send realtime data every 
 const unsigned long ECG_TX_INTERVAL = 306000;       // Send ECG data every 306s (5.1 minutes)
 bool fallEventTriggered = false;
 
+// Maximum noise tracking
+float maxNoisedB = 0.0;  // Track maximum noise level between transmissions
+unsigned long maxNoiseTimestamp = 0;  // When max noise occurred
+
 // Helper function to format time remaining
 String formatTimeRemaining(unsigned long milliseconds) {
   unsigned long seconds = milliseconds / 1000;
@@ -2738,6 +2742,12 @@ void loop() {
   // Read noise level
   float soundLevel = microphone.readSoundLevel(MIC_SAMPLE_WINDOW);
   
+  // Track maximum noise level between transmissions
+  if (soundLevel > maxNoisedB) {
+    maxNoisedB = soundLevel;
+    maxNoiseTimestamp = currentTime;
+  }
+  
   // Display sensor data
   mpu.printData(data);
   
@@ -2785,6 +2795,13 @@ void loop() {
   // Display noise monitoring
   Serial.println("--- Environmental Noise Monitoring ---");
   microphone.printStatus(soundLevel);
+  if (maxNoisedB > 0) {
+    Serial.print("Max Noise Since Last Tx: ");
+    Serial.print(maxNoisedB, 1);
+    Serial.print(" dB (at ");
+    Serial.print(formatTimeRemaining(currentTime - maxNoiseTimestamp));
+    Serial.println(" ago)");
+  }
   
   // Display fall detection status
   Serial.println("--- Fall Detection Status ---");
@@ -3100,17 +3117,21 @@ void loop() {
                         fall_event.state == FallDetector::DANGEROUS);
       bool noiseAlert = (soundLevel > 100.0f);
       
+      // Use max noise level if available, otherwise use current
+      float noiseToSend = (maxNoisedB > 0) ? maxNoisedB : soundLevel;
+      bool noiseAlertMax = (noiseToSend > 100.0f);
+      
       int len = PayloadBuilder::buildRealtimePayload(
         payload,
         bpm > 0 ? bpm : 0,
         !isnan(bodyTemp) ? bodyTemp : 0.0f,
         !isnan(ambientTemp) ? ambientTemp : 0.0f,
-        soundLevel,
+        noiseToSend,
         fall_event.state,
         hrAbnormal,
         tempAbnormal,
         fallAlert,
-        noiseAlert
+        noiseAlertMax
       );
       
       // Display packet contents
@@ -3134,10 +3155,10 @@ void loop() {
       Serial.print("  │ Ambient Temp:      ");
       Serial.print(ambientTemp, 1);
       Serial.println(" °C            │");
-      Serial.print("  │ Noise Level:       ");
-      Serial.print(soundLevel, 0);
+      Serial.print("  │ Noise Level (Max): ");
+      Serial.print(noiseToSend, 0);
       Serial.print(" dB");
-      Serial.println(noiseAlert ? " ⚠️" : "   " + String("│"));
+      Serial.println(noiseAlertMax ? " ⚠️" : "   " + String("│"));
       Serial.print("  │ Fall State:        ");
       switch(fall_event.state) {
         case FallDetector::NORMAL: Serial.println("Normal             │"); break;
@@ -3192,6 +3213,10 @@ void loop() {
         Serial.print("  🕒 Next transmission: ");
         Serial.println(formatTimeRemaining(REALTIME_TX_INTERVAL));
         lastRealtimeTxTime = currentTime;
+        
+        // Reset max noise tracking after successful transmission
+        maxNoisedB = 0.0;
+        maxNoiseTimestamp = 0;
       } else {
         Serial.println("\n  ❌ FAILED!");
         Serial.print("  ⏱️  Attempt duration: ");

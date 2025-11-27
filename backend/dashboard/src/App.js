@@ -11,6 +11,9 @@ import {
   Chip,
   Alert,
   CircularProgress,
+  Button,
+  IconButton,
+  Snackbar,
 } from '@mui/material';
 import {
   Favorite,
@@ -18,6 +21,8 @@ import {
   VolumeUp,
   Warning,
   CheckCircle,
+  Refresh,
+  RestartAlt,
 } from '@mui/icons-material';
 import {
   LineChart,
@@ -40,9 +45,12 @@ function App() {
   const [selectedDevice, setSelectedDevice] = useState('ESP32-001');
   const [latestVitals, setLatestVitals] = useState(null);
   const [realtimeData, setRealtimeData] = useState([]);
+  const [ecgData, setEcgData] = useState(null);
   const [fallAlerts, setFallAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
 
   // Fetch devices
   useEffect(() => {
@@ -91,6 +99,12 @@ function App() {
       }));
       setRealtimeData(processedData.reverse());
 
+      // Fetch latest ECG data with PQRST waveform
+      const ecgRes = await axios.get(`${API_URL}/api/ecg/${selectedDevice}?limit=1`);
+      if (ecgRes.data.length > 0) {
+        setEcgData(ecgRes.data[0]);
+      }
+
       // Fetch pending fall alerts
       const fallsRes = await axios.get(`${API_URL}/api/falls/alerts/pending`);
       setFallAlerts(fallsRes.data);
@@ -113,6 +127,33 @@ function App() {
     return colors[state] || 'default';
   };
 
+  const handleReset = () => {
+    // Refresh all data
+    fetchData();
+    setSnackbarMessage('Dashboard refreshed successfully');
+    setSnackbarOpen(true);
+  };
+
+  const handleAcknowledgeAlerts = async () => {
+    try {
+      // Acknowledge all pending fall alerts
+      for (const alert of fallAlerts) {
+        await axios.put(`${API_URL}/api/falls/${alert.id}/acknowledge`);
+      }
+      setFallAlerts([]);
+      setSnackbarMessage('All alerts acknowledged');
+      setSnackbarOpen(true);
+    } catch (err) {
+      console.error('Error acknowledging alerts:', err);
+      setSnackbarMessage('Failed to acknowledge alerts');
+      setSnackbarOpen(true);
+    }
+  };
+
+  const handleSnackbarClose = () => {
+    setSnackbarOpen(false);
+  };
+
   if (loading && !latestVitals) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
@@ -128,6 +169,14 @@ function App() {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             🏥 Health Monitoring Dashboard
           </Typography>
+          <IconButton 
+            color="inherit" 
+            onClick={handleReset}
+            title="Refresh Data"
+            sx={{ mr: 2 }}
+          >
+            <Refresh />
+          </IconButton>
           <Typography variant="body2">
             Device: {selectedDevice}
           </Typography>
@@ -143,7 +192,21 @@ function App() {
 
         {/* Fall Alerts */}
         {fallAlerts.length > 0 && (
-          <Alert severity="error" icon={<Warning />} sx={{ mb: 3 }}>
+          <Alert 
+            severity="error" 
+            icon={<Warning />} 
+            sx={{ mb: 3 }}
+            action={
+              <Button 
+                color="inherit" 
+                size="small" 
+                onClick={handleAcknowledgeAlerts}
+                startIcon={<CheckCircle />}
+              >
+                Acknowledge
+              </Button>
+            }
+          >
             <Typography variant="h6">🚨 FALL ALERT!</Typography>
             {fallAlerts.map(alert => (
               <Typography key={alert.id} variant="body2">
@@ -329,7 +392,7 @@ function App() {
           </Grid>
 
           {/* Noise Level Chart */}
-          <Grid item xs={12}>
+          <Grid item xs={12} md={6}>
             <Card>
               <CardContent>
                 <Typography variant="h6" gutterBottom>
@@ -356,6 +419,106 @@ function App() {
                     />
                   </LineChart>
                 </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          {/* ECG PQRST Spectrum */}
+          <Grid item xs={12} md={6}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  ECG Waveform (PQRST)
+                </Typography>
+                {ecgData ? (
+                  <>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <LineChart data={[
+                        { label: 'P', amplitude: ecgData.p_amplitude / 1000 },
+                        { label: 'Q', amplitude: ecgData.q_amplitude / 1000 },
+                        { label: 'R', amplitude: ecgData.r_amplitude / 1000 },
+                        { label: 'S', amplitude: ecgData.s_amplitude / 1000 },
+                        { label: 'T', amplitude: ecgData.t_amplitude / 1000 }
+                      ]}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis 
+                          dataKey="label" 
+                          label={{ value: 'PQRST Waves', position: 'insideBottom', offset: -5 }}
+                        />
+                        <YAxis 
+                          label={{ value: 'Amplitude (mV)', angle: -90, position: 'insideLeft' }}
+                        />
+                        <Tooltip 
+                          formatter={(value) => [`${value.toFixed(3)} mV`, 'Amplitude']}
+                        />
+                        <Legend />
+                        <Line 
+                          type="monotone" 
+                          dataKey="amplitude" 
+                          stroke="#d32f2f" 
+                          name="ECG Signal"
+                          strokeWidth={3}
+                          dot={{ r: 6 }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                    <Box mt={2} display="flex" flexDirection="column" gap={1}>
+                      <Box display="flex" justifyContent="space-around">
+                        <Chip 
+                          label={`P: ${(ecgData.p_amplitude / 1000).toFixed(2)} mV`} 
+                          size="small" 
+                          color="primary" 
+                          variant="outlined" 
+                        />
+                        <Chip 
+                          label={`Q: ${(ecgData.q_amplitude / 1000).toFixed(2)} mV`} 
+                          size="small" 
+                          color="secondary" 
+                          variant="outlined" 
+                        />
+                        <Chip 
+                          label={`R: ${(ecgData.r_amplitude / 1000).toFixed(2)} mV`} 
+                          size="small" 
+                          color="error" 
+                          variant="outlined" 
+                        />
+                        <Chip 
+                          label={`S: ${(ecgData.s_amplitude / 1000).toFixed(2)} mV`} 
+                          size="small" 
+                          color="warning" 
+                          variant="outlined" 
+                        />
+                        <Chip 
+                          label={`T: ${(ecgData.t_amplitude / 1000).toFixed(2)} mV`} 
+                          size="small" 
+                          color="success" 
+                          variant="outlined" 
+                        />
+                      </Box>
+                      <Box display="flex" justifyContent="center" gap={2}>
+                        <Chip 
+                          label={`QRS Width: ${ecgData.qrs_width} ms`} 
+                          size="small" 
+                          variant="outlined" 
+                        />
+                        <Chip 
+                          label={`QT Interval: ${ecgData.qt_interval} ms`} 
+                          size="small" 
+                          variant="outlined" 
+                        />
+                      </Box>
+                      <Typography variant="caption" color="textSecondary" textAlign="center">
+                        Last updated: {format(new Date(ecgData.timestamp), 'PPpp')}
+                      </Typography>
+                    </Box>
+                  </>
+                ) : (
+                  <Box display="flex" justifyContent="center" alignItems="center" height={300}>
+                    <Typography variant="body2" color="textSecondary">
+                      Waiting for ECG data from device...
+                    </Typography>
+                  </Box>
+                )}
               </CardContent>
             </Card>
           </Grid>
