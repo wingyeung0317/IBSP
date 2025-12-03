@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
+#include <SPI.h>
+#include <RadioLib.h>
 
 /**
  * ==============================================================================
@@ -1960,139 +1960,90 @@ public:
 };
 
 // ============================================================================
-// WIFI COMMUNICATION CLASS
+// LORA COMMUNICATION CLASS
 // ============================================================================
 
 /**
- * WiFiComm - Handle WiFi communication with remote server
+ * LoRaComm - Handle LoRa communication
  * 
- * Connects to WiFi hotspot and sends data via HTTPS POST
- * Maintains same packet format as LoRaWAN version
+ * Sends data packets via LoRa to Vision Master E213 receiver
+ * Uses RadioLib for SX1262 LoRa module
  */
-
-// WiFi credentials
-const char* WIFI_SSID = "Jason--2.4GHz";
-const char* WIFI_PASSWORD = "tinyung8";
-
-// Server endpoint - CHANGE THIS TO YOUR SERVER URL
-// Example: "https://your-server.com/api/sensor-data"
-// For local testing: Use ngrok to create a public URL for your local server
-const char* SERVER_URL = "http://14.199.24.116:5000/api/sensor-data";
 
 // Device ID (unique identifier for this device)
 const char* DEVICE_ID = "ESP32-001";
 
-/**
- * Base64 encoding helper (simple implementation)
- */
-const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+// LoRa Configuration for Heltec WiFi LoRa 32 V3
+// SX1262 Pins
+const int LORA_NSS = 8;      // SPI NSS (Chip Select)
+const int LORA_DIO1 = 14;    // DIO1
+const int LORA_NRST = 12;    // Reset
+const int LORA_BUSY = 13;    // Busy
 
-String base64_encode(const uint8_t* data, size_t len) {
-  String encoded = "";
-  int val = 0;
-  int valb = -6;
-  
-  for (size_t i = 0; i < len; i++) {
-    val = (val << 8) + data[i];
-    valb += 8;
-    while (valb >= 0) {
-      encoded += base64_chars[(val >> valb) & 0x3F];
-      valb -= 6;
-    }
-  }
-  
-  if (valb > -6) {
-    encoded += base64_chars[((val << 8) >> (valb + 8)) & 0x3F];
-  }
-  
-  while (encoded.length() % 4) {
-    encoded += '=';
-  }
-  
-  return encoded;
-}
+// LoRa Parameters
+const float LORA_FREQUENCY = 923.0;     // Frequency in MHz (923 for Hong Kong AS923)
+const float LORA_BANDWIDTH = 125.0;     // Bandwidth in kHz
+const uint8_t LORA_SPREADING_FACTOR = 9; // Spreading Factor (7-12)
+const uint8_t LORA_CODING_RATE = 7;     // Coding Rate (5-8)
+const int8_t LORA_OUTPUT_POWER = 22;    // TX Power in dBm (max 22)
+const uint16_t LORA_PREAMBLE_LENGTH = 8; // Preamble length
+const uint8_t LORA_SYNC_WORD = 0x12;    // Sync word (0x12 = private network)
 
-class WiFiComm {
+// SX1262 LoRa module instance
+SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_NRST, LORA_BUSY);
+
+class LoRaComm {
 private:
-  bool connected;
+  bool initialized;
   uint32_t lastTxTime;
   uint16_t frameCounter;
-  int rssi;
+  int lastRssi;
+  float lastSnr;
   
 public:
-  WiFiComm() {
-    connected = false;
+  LoRaComm() {
+    initialized = false;
     lastTxTime = 0;
     frameCounter = 0;
-    rssi = 0;
+    lastRssi = 0;
+    lastSnr = 0;
   }
   
   /**
-   * Initialize WiFi
+   * Initialize LoRa module
    */
   bool begin() {
-    Serial.println("Initializing WiFi...");
-    Serial.print("  SSID: ");
-    Serial.println(WIFI_SSID);
-    Serial.print("  Device ID: ");
-    Serial.println(DEVICE_ID);
-    Serial.print("  Server URL: ");
-    Serial.println(SERVER_URL);
+    Serial.println("\n🔧 Initializing LoRa SX1262...");
     
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    // Initialize SX1262
+    int state = radio.begin(LORA_FREQUENCY, LORA_BANDWIDTH, LORA_SPREADING_FACTOR, 
+                           LORA_CODING_RATE, LORA_SYNC_WORD, LORA_OUTPUT_POWER, 
+                           LORA_PREAMBLE_LENGTH);
     
-    return true;
-  }
-  
-  /**
-   * Connect to WiFi
-   */
-  bool connect() {
-    if (WiFi.status() == WL_CONNECTED) {
-      connected = true;
-      rssi = WiFi.RSSI();
-      return true;
-    }
-    
-    Serial.println("\nConnecting to WiFi...");
-    Serial.print("  SSID: ");
-    Serial.println(WIFI_SSID);
-    
-    unsigned long startTime = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - startTime < 30000)) {
-      delay(500);
-      Serial.print(".");
-    }
-    Serial.println();
-    
-    if (WiFi.status() == WL_CONNECTED) {
-      connected = true;
-      rssi = WiFi.RSSI();
-      Serial.println("\n✓ WiFi connected!");
-      Serial.print("  IP Address: ");
-      Serial.println(WiFi.localIP());
-      Serial.print("  RSSI: ");
-      Serial.print(rssi);
-      Serial.println(" dBm");
-      Serial.print("  Gateway: ");
-      Serial.println(WiFi.gatewayIP());
-      frameCounter = 0;
+    if (state == RADIOLIB_ERR_NONE) {
+      Serial.println("✅ LoRa initialized successfully!");
+      Serial.printf("   Frequency: %.1f MHz\n", LORA_FREQUENCY);
+      Serial.printf("   Bandwidth: %.1f kHz\n", LORA_BANDWIDTH);
+      Serial.printf("   Spreading Factor: %d\n", LORA_SPREADING_FACTOR);
+      Serial.printf("   TX Power: %d dBm\n", LORA_OUTPUT_POWER);
+      initialized = true;
       return true;
     } else {
-      connected = false;
-      Serial.println("\n✗ WiFi connection failed");
-      Serial.println("\n  TROUBLESHOOTING:");
-      Serial.println("  • Check if hotspot is enabled on your phone");
-      Serial.println("  • Verify SSID and password are correct");
-      Serial.println("  • Make sure 2.4GHz band is enabled");
-      Serial.println("  • Check if device is within range");
+      Serial.print("❌ LoRa initialization failed, code: ");
+      Serial.println(state);
       return false;
     }
   }
   
   /**
-   * Send data via HTTP POST
+   * Check if LoRa is initialized (compatibility method)
+   */
+  bool connect() {
+    return initialized;
+  }
+  
+  /**
+   * Send data via LoRa
    * @param port Packet type (1=realtime, 2=ECG, 3=fall)
    * @param data Data buffer
    * @param len Data length
@@ -2100,84 +2051,61 @@ public:
    * @return true if sent successfully
    */
   bool sendUplink(uint8_t port, uint8_t* data, size_t len, bool confirmed = false) {
-    // Check WiFi connection
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("WiFi not connected! Reconnecting...");
-      connect();
-      if (!connected) {
-        return false;
-      }
-    }
-    
-    // Rate limiting (don't send too frequently)
-    uint32_t now = millis();
-    uint32_t minInterval = 1000;  // Minimum 1 second between transmissions
-    if (now - lastTxTime < minInterval) {
-      Serial.println("Rate limit - waiting...");
+    if (!initialized) {
+      Serial.println("❌ LoRa not initialized");
       return false;
     }
     
-    Serial.print("Sending HTTP POST (type ");
-    Serial.print(port);
-    Serial.print(", ");
-    Serial.print(len);
-    Serial.print(" bytes)...");
+    // Create packet with header
+    // Packet format: [Device ID (10 bytes)] [Frame Counter (2 bytes)] [Port (1 byte)] [Data (n bytes)]
+    uint8_t packet[128];
+    int packetLen = 0;
     
-    HTTPClient http;
-    http.begin(SERVER_URL);
-    http.addHeader("Content-Type", "application/json");
-    http.setTimeout(10000);  // 10 second timeout
+    // Add device ID (10 bytes, padded with zeros)
+    memset(packet, 0, 10);
+    strncpy((char*)packet, DEVICE_ID, 10);
+    packetLen = 10;
     
-    // Build JSON payload
-    // Format: {"device_id": "ESP32-001", "packet_type": 1, "data": "base64...", "timestamp": 12345, "rssi": -45}
-    String base64Data = base64_encode(data, len);
+    // Add frame counter (2 bytes, little-endian)
+    packet[packetLen++] = frameCounter & 0xFF;
+    packet[packetLen++] = (frameCounter >> 8) & 0xFF;
     
-    String jsonPayload = "{";
-    jsonPayload += "\"device_id\":\"" + String(DEVICE_ID) + "\",";
-    jsonPayload += "\"packet_type\":" + String(port) + ",";
-    jsonPayload += "\"data\":\"" + base64Data + "\",";
-    jsonPayload += "\"timestamp\":" + String(now) + ",";
-    jsonPayload += "\"frame_counter\":" + String(frameCounter) + ",";
-    jsonPayload += "\"rssi\":" + String(rssi);
-    jsonPayload += "}";
+    // Add port/packet type (1 byte)
+    packet[packetLen++] = port;
     
-    int httpCode = http.POST(jsonPayload);
+    // Add payload data
+    memcpy(packet + packetLen, data, len);
+    packetLen += len;
     
-    if (httpCode > 0) {
-      Serial.print(" HTTP ");
-      Serial.print(httpCode);
+    // Send packet
+    Serial.printf("📡 Sending LoRa packet (Type %d, %d bytes)...\n", port, packetLen);
+    
+    int state = radio.transmit(packet, packetLen);
+    
+    if (state == RADIOLIB_ERR_NONE) {
+      // Get transmission info
+      lastRssi = radio.getRSSI();
+      lastSnr = radio.getSNR();
       
-      if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
-        Serial.println(" - Success!");
-        String response = http.getString();
-        if (response.length() > 0 && response.length() < 200) {
-          Serial.print("  Response: ");
-          Serial.println(response);
-        }
-        lastTxTime = now;
-        frameCounter++;
-        http.end();
-        return true;
-      } else {
-        Serial.println(" - Failed");
-        String response = http.getString();
-        Serial.print("  Error: ");
-        Serial.println(response);
-      }
+      Serial.println("✅ Packet sent successfully!");
+      Serial.printf("   Frame: %d\n", frameCounter);
+      Serial.printf("   Size: %d bytes\n", packetLen);
+      
+      frameCounter++;
+      lastTxTime = millis();
+      return true;
     } else {
-      Serial.print(" - Connection error: ");
-      Serial.println(http.errorToString(httpCode));
+      Serial.print("❌ LoRa transmission failed, code: ");
+      Serial.println(state);
+      return false;
     }
-    
-    http.end();
-    return false;
   }
   
   /**
-   * Check if connected to WiFi
+   * Check if LoRa is initialized
    */
   bool isJoined() {
-    return (WiFi.status() == WL_CONNECTED);
+    return initialized;
   }
   
   /**
@@ -2188,29 +2116,25 @@ public:
   }
   
   /**
-   * Get RSSI
+   * Get last RSSI
    */
   int getRSSI() {
-    if (WiFi.status() == WL_CONNECTED) {
-      rssi = WiFi.RSSI();
-    }
-    return rssi;
+    return lastRssi;
   }
   
   /**
-   * Check connection and reconnect if needed
+   * Get last SNR
+   */
+  float getSNR() {
+    return lastSnr;
+  }
+  
+  /**
+   * Check LoRa status (compatibility method)
    */
   void maintain() {
-    if (WiFi.status() != WL_CONNECTED && connected) {
-      Serial.println("\n⚠️  WiFi connection lost! Reconnecting...");
-      connected = false;
-      connect();
-    }
-    
-    // Update RSSI
-    if (WiFi.status() == WL_CONNECTED) {
-      rssi = WiFi.RSSI();
-    }
+    // LoRa doesn't need connection maintenance
+    // This method kept for compatibility
   }
 };
 
@@ -2434,7 +2358,7 @@ FallDetector fallDetector; // Fall detection algorithm instance
 MAX4466 microphone(PIN_MIC); // MAX4466 microphone object
 AD8232 ecgMonitor(PIN_ECG, PIN_LO_PLUS, PIN_LO_MINUS); // AD8232 ECG monitor
 MLX90614Sensor tempSensor; // MLX90614 temperature sensor
-WiFiComm wifiComm;        // WiFi communication object
+LoRaComm loraComm;        // LoRa communication object
 
 // ECG sampling timing
 unsigned long lastECGSampleTime = 0;
@@ -2979,8 +2903,8 @@ void loop() {
   // WiFi Data Transmission
   // ========================================
   
-  // Maintain WiFi connection
-  wifiComm.maintain();
+  // LoRa doesn't need connection maintenance
+  // loraComm.maintain();
   
   if (wifiComm.isJoined()) {
     // Send fall event immediately (Packet Type 0x03)
