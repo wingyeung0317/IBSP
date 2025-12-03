@@ -43,8 +43,34 @@ stats = {
     'packets_received': 0,
     'packets_sent': 0,
     'errors': 0,
-    'last_packet_time': None
+    'last_packet_time': None,
+    'time_syncs_sent': 0
 }
+
+def send_time_sync():
+    """Send current time to Vision Master E213 for display"""
+    global ser, stats
+    
+    if not ser or not ser.is_open:
+        return
+    
+    try:
+        now = datetime.now()
+        # Time sync format: [0xFF][0xFE][YY][YY][MM][DD][HH][MM][SS][0xFD]
+        time_packet = bytearray([
+            0xFF, 0xFE,
+            (now.year >> 8) & 0xFF, now.year & 0xFF,
+            now.month, now.day,
+            now.hour, now.minute, now.second,
+            0xFD
+        ])
+        
+        ser.write(time_packet)
+        stats['time_syncs_sent'] += 1
+        print(f"⏰ Time sync sent: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+    except Exception as e:
+        print(f"❌ Error sending time sync: {e}")
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C gracefully"""
@@ -177,63 +203,69 @@ def read_lora_packets():
     print("="*60 + "\n")
     
     buffer = bytearray()
+    last_time_sync = time.time()
+    
+    # Send initial time sync
+    send_time_sync()
     
     while running:
         try:
-            # Read available data
+            # Check for time sync request (0xFE from Vision Master)
             if ser.in_waiting > 0:
-                data = ser.read(ser.in_waiting)
-                buffer.extend(data)
+                first_byte = ser.read(1)
                 
-                # Process complete packets
-                # Simple framing: packets start with device ID prefix
-                while len(buffer) >= 13:
-                    # Try to find packet start
-                    # Device IDs typically start with "ESP32-"
-                    if buffer[:5] == b'ESP32':
-                        # Determine packet length based on type
-                        if len(buffer) >= 13:
-                            port = buffer[12]
+                if first_byte == b'\xFE':
+                    # Time sync request received
+                    send_time_sync()
+                    continue
+                elif first_byte == b'\xAA':
+                    # Start of LoRa packet frame
+                    # Format: [0xAA][LEN][RSSI][SNR][DATA...][0x55]
+                    if ser.in_waiting >= 3:
+                        length = ord(ser.read(1))
+                        rssi_encoded = ord(ser.read(1))
+                        snr_encoded = ord(ser.read(1))
+                        
+                        # Wait for complete packet
+                        packet_data = ser.read(length)
+                        end_marker = ser.read(1)
+                        
+                        if end_marker == b'\x55' and len(packet_data) == length:
+                            # Decode RSSI/SNR
+                            rssi = rssi_encoded - 150
+                            snr = snr_encoded - 20
                             
-                            # Expected payload sizes
-                            payload_sizes = {1: 10, 2: 65, 3: 45}
-                            expected_size = 13 + payload_sizes.get(port, 0)
-                            
-                            if len(buffer) >= expected_size:
-                                # Extract packet
-                                packet_data = bytes(buffer[:expected_size])
-                                buffer = buffer[expected_size:]
+                            # Parse packet
+                            packet_info = parse_packet(bytes(packet_data))
+                            if packet_info:
+                                stats['packets_received'] += 1
+                                stats['last_packet_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                                 
-                                # Parse and process packet
-                                packet_info = parse_packet(packet_data)
-                                if packet_info:
-                                    stats['packets_received'] += 1
-                                    stats['last_packet_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                    
-                                    print(f"\n📦 Packet #{stats['packets_received']}")
-                                    print(f"   Device: {packet_info['device_id']}")
-                                    print(f"   Type: {packet_info['packet_type_name']} (Port {packet_info['packet_type']})")
-                                    print(f"   Frame: {packet_info['frame_counter']}")
-                                    print(f"   Size: {packet_info['payload_length']} bytes")
-                                    
-                                    # Send to server (RSSI/SNR would come from Vision Master)
-                                    send_to_server(packet_info)
-                            else:
-                                # Wait for more data
-                                break
-                    else:
-                        # Remove invalid byte
-                        buffer = buffer[1:]
-                
-                # Prevent buffer overflow
-                if len(buffer) > 256:
-                    print("⚠️  Buffer overflow, clearing...")
-                    buffer = bytearray()
+                                print(f"\n📦 Packet #{stats['packets_received']}")
+                                print(f"   Device: {packet_info['device_id']}")
+                                print(f"   Type: {packet_info['packet_type_name']} (Port {packet_info['packet_type']})")
+                                print(f"   Frame: {packet_info['frame_counter']}")
+                                print(f"   RSSI: {rssi} dBm, SNR: {snr} dB")
+                                print(f"   Size: {packet_info['payload_length']} bytes")
+                                
+                                # Add RSSI/SNR to packet info
+                                packet_info['rssi'] = rssi
+                                
+                                # Send to server
+                                send_to_server(packet_info)
+                        else:
+                            print(f"⚠️  Invalid packet frame (len={len(packet_data)}, end={end_marker.hex()})")
+                else:
+                    # Unknown byte, discard
+                    pass
             
-            else:
-                # No data available, short sleep
-                time.sleep(0.01)
-                
+            # Periodic time sync (every 60 seconds)
+            if time.time() - last_time_sync > 60:
+                send_time_sync()
+                last_time_sync = time.time()
+            
+            time.sleep(0.01)
+            
         except serial.SerialException as e:
             print(f"❌ UART error: {e}")
             stats['errors'] += 1

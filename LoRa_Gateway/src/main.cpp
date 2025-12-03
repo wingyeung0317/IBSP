@@ -54,6 +54,149 @@ bool displayAvailable = false;
 int displayWidth = 250;
 int displayHeight = 122;
 
+// Time sync
+struct {
+  uint8_t hour;
+  uint8_t minute;
+  uint8_t second;
+  uint16_t year;
+  uint8_t month;
+  uint8_t day;
+  bool valid;
+  unsigned long lastSyncMillis;
+} currentTime = {0, 0, 0, 2025, 1, 1, false, 0};
+
+// Last packet info
+struct {
+  uint8_t type;  // 1=Realtime, 2=ECG, 3=Fall
+  char deviceId[11];
+  uint16_t frameCounter;
+  int8_t heartRate;
+  float temperature;
+  uint8_t noiseLevel;
+  bool fallDetected;
+  bool noiseAlert;
+  bool hrAlert;
+  bool tempAlert;
+} lastPacket = {0, "", 0, 0, 0.0, 0, false, false, false, false};
+
+// ============================================================================
+// TIME SYNC & PACKET PARSING
+// ============================================================================
+
+void updateCurrentTime() {
+  if (!currentTime.valid) return;
+  
+  // Calculate elapsed time since last sync
+  unsigned long elapsedMs = millis() - currentTime.lastSyncMillis;
+  unsigned long elapsedSec = elapsedMs / 1000;
+  
+  currentTime.second += elapsedSec;
+  currentTime.lastSyncMillis += elapsedSec * 1000;
+  
+  // Handle overflow
+  if (currentTime.second >= 60) {
+    currentTime.minute += currentTime.second / 60;
+    currentTime.second %= 60;
+  }
+  if (currentTime.minute >= 60) {
+    currentTime.hour += currentTime.minute / 60;
+    currentTime.minute %= 60;
+  }
+  if (currentTime.hour >= 24) {
+    currentTime.hour %= 24;
+    // Note: day/month/year rollover not implemented for simplicity
+  }
+}
+
+void parsePacketInfo(uint8_t* data, int length) {
+  if (length < 13) return;  // Minimum: 10B device ID + 2B frame + 1B port
+  
+  // Extract device ID (first 10 bytes)
+  memcpy(lastPacket.deviceId, data, 10);
+  lastPacket.deviceId[10] = '\0';
+  
+  // Extract frame counter (bytes 10-11, little-endian)
+  lastPacket.frameCounter = (data[11] << 8) | data[10];
+  
+  // Extract port/packet type (byte 12)
+  lastPacket.type = data[12];
+  
+  // Reset alerts
+  lastPacket.noiseAlert = false;
+  lastPacket.hrAlert = false;
+  lastPacket.tempAlert = false;
+  
+  // Payload starts at byte 13
+  if (lastPacket.type == 1 && length >= 23) {
+    // Realtime data payload (10 bytes):
+    // [0] type=0x01
+    // [1] HR
+    // [2] body temp
+    // [3] ambient temp
+    // [4] noise
+    // [5] fall state
+    // [6] alert flags
+    // [7-8] RSSI (placeholder)
+    // [9] SNR (placeholder)
+    
+    lastPacket.heartRate = data[14];  // Byte 1 of payload
+    uint8_t tempEncoded = data[15];   // Byte 2 of payload
+    lastPacket.temperature = ((tempEncoded / 255.0) * 100.0) - 20.0;
+    // Skip ambient temp (byte 16)
+    lastPacket.noiseLevel = data[17];  // Byte 4 of payload
+    lastPacket.fallDetected = (data[18] > 0);  // Byte 5 = fall_state
+    
+    // Extract alert flags (byte 6 of payload = byte 19 of packet)
+    uint8_t alertFlags = data[19];
+    lastPacket.hrAlert = (alertFlags & 0x01) != 0;    // Bit 0: HR abnormal
+    lastPacket.tempAlert = (alertFlags & 0x02) != 0;  // Bit 1: Temp abnormal
+    // Skip bit 2 (fall alert - redundant with fall_state)
+    lastPacket.noiseAlert = (alertFlags & 0x08) != 0; // Bit 3: Noise alert
+    
+  } else if (lastPacket.type == 2) {
+    // ECG data
+    lastPacket.heartRate = -1;  // Unknown
+    lastPacket.temperature = 0;
+    lastPacket.noiseLevel = 0;
+    lastPacket.fallDetected = false;
+    
+  } else if (lastPacket.type == 3 && length >= 58) {
+    // Fall event: [type][timestamp 4B][jerk 4B][svm 4B][...][HR][temp][...]
+    // Payload structure is more complex - adjust offsets
+    lastPacket.heartRate = data[40];  // Byte 27 of payload
+    uint8_t tempEncoded = data[41];
+    lastPacket.temperature = ((tempEncoded / 255.0) * 100.0) - 20.0;
+    lastPacket.noiseLevel = 0;  // Not included in fall event
+    lastPacket.fallDetected = true;
+  }
+}
+
+void checkUartTimeSync() {
+  // Time sync format from Raspberry Pi: [0xFF][0xFE][YY][YY][MM][DD][HH][MM][SS][0xFD]
+  if (Serial1.available() >= 10) {
+    if (Serial1.peek() == 0xFF) {
+      uint8_t syncBuffer[10];
+      Serial1.readBytes(syncBuffer, 10);
+      
+      if (syncBuffer[0] == 0xFF && syncBuffer[1] == 0xFE && syncBuffer[9] == 0xFD) {
+        currentTime.year = (syncBuffer[2] << 8) | syncBuffer[3];
+        currentTime.month = syncBuffer[4];
+        currentTime.day = syncBuffer[5];
+        currentTime.hour = syncBuffer[6];
+        currentTime.minute = syncBuffer[7];
+        currentTime.second = syncBuffer[8];
+        currentTime.valid = true;
+        currentTime.lastSyncMillis = millis();
+        
+        Serial.printf("⏰ Time synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+                     currentTime.year, currentTime.month, currentTime.day,
+                     currentTime.hour, currentTime.minute, currentTime.second);
+      }
+    }
+  }
+}
+
 // ============================================================================
 // POWER MANAGEMENT
 // ============================================================================
@@ -163,33 +306,123 @@ void initDisplay() {
 void updateDisplay(int rssi, float snr, int length, uint32_t count) {
   if (!displayAvailable || !display) return;
   
+  updateCurrentTime();
+  
   display->clear();
   
-  // Title
+  // === Header: Time and Title ===
   display->setTextAlignment(TEXT_ALIGN_LEFT);
-  display->setFont(ArialMT_Plain_16);
-  display->drawString(5, 5, "LoRa Gateway");
-  
-  // Status
   display->setFont(ArialMT_Plain_10);
-  char buffer[50];
   
-  sprintf(buffer, "Packets: %lu", count);
-  display->drawString(5, 30, buffer);
+  if (currentTime.valid) {
+    char timeStr[20];
+    sprintf(timeStr, "%02d:%02d:%02d", currentTime.hour, currentTime.minute, currentTime.second);
+    display->drawString(2, 0, timeStr);
+  } else {
+    display->drawString(2, 0, "--:--:--");
+  }
   
-  sprintf(buffer, "RSSI: %d dBm", rssi);
-  display->drawString(5, 45, buffer);
+  display->setTextAlignment(TEXT_ALIGN_CENTER);
+  display->setFont(ArialMT_Plain_16);
+  display->drawString(125, 0, "LoRa Gateway");
   
-  sprintf(buffer, "SNR: %.1f dB", snr);
-  display->drawString(5, 60, buffer);
+  // === Line separator ===
+  display->drawHorizontalLine(0, 18, 250);
   
-  sprintf(buffer, "Length: %d bytes", length);
-  display->drawString(5, 75, buffer);
+  display->setTextAlignment(TEXT_ALIGN_LEFT);
+  display->setFont(ArialMT_Plain_10);
+  char buffer[60];
   
-  // Uptime
-  unsigned long uptime = millis() / 1000;
-  sprintf(buffer, "Up: %lum %lus", uptime / 60, uptime % 60);
-  display->drawString(5, 95, buffer);
+  if (count > 0) {
+    // === LEFT COLUMN (0-120) ===
+    
+    // Packet type
+    const char* typeStr = "Unknown";
+    if (lastPacket.type == 1) typeStr = "Realtime";
+    else if (lastPacket.type == 2) typeStr = "ECG";
+    else if (lastPacket.type == 3) typeStr = "FALL";
+    
+    sprintf(buffer, "Type:%s", typeStr);
+    display->drawString(2, 22, buffer);
+    
+    // Device ID
+    sprintf(buffer, "Dev:%.8s", lastPacket.deviceId);
+    display->drawString(2, 34, buffer);
+    
+    // Frame number
+    sprintf(buffer, "Frame:#%d", lastPacket.frameCounter);
+    display->drawString(2, 46, buffer);
+    
+    // Health data
+    if (lastPacket.type == 1 || lastPacket.type == 3) {
+      sprintf(buffer, "HR:%d%s bpm", 
+              lastPacket.heartRate,
+              lastPacket.hrAlert ? "!" : "");
+      display->drawString(2, 58, buffer);
+      
+      sprintf(buffer, "Temp:%.1f%sC", 
+              lastPacket.temperature,
+              lastPacket.tempAlert ? "!" : "");
+      display->drawString(2, 70, buffer);
+      
+      if (lastPacket.type == 1) {
+        sprintf(buffer, "Noise:%ddB%s", 
+                lastPacket.noiseLevel,
+                lastPacket.noiseAlert ? "!" : "");
+        display->drawString(2, 82, buffer);
+      }
+    }
+    
+    // === RIGHT COLUMN (130-248) ===
+    
+    // Signal quality
+    sprintf(buffer, "RSSI:%ddBm", rssi);
+    display->drawString(130, 22, buffer);
+    
+    sprintf(buffer, "SNR:%.1fdB", snr);
+    display->drawString(130, 34, buffer);
+    
+    // Packet stats
+    sprintf(buffer, "Size:%dB", length);
+    display->drawString(130, 46, buffer);
+    
+    sprintf(buffer, "Total:%lu", count);
+    display->drawString(130, 58, buffer);
+    
+    // Alert status
+    if (lastPacket.fallDetected) {
+      display->setFont(ArialMT_Plain_16);
+      display->drawString(130, 72, "**FALL**");
+      display->setFont(ArialMT_Plain_10);
+    } else if (lastPacket.noiseAlert) {
+      display->drawString(130, 70, "LOUD!");
+    } else if (lastPacket.hrAlert || lastPacket.tempAlert) {
+      display->drawString(130, 70, "Alert!");
+    } else {
+      display->drawString(130, 70, "Normal");
+    }
+    
+    // === Bottom status bar ===
+    display->drawHorizontalLine(0, 96, 250);
+    
+    if (lastPacket.fallDetected && lastPacket.type == 3) {
+      display->setFont(ArialMT_Plain_16);
+      display->setTextAlignment(TEXT_ALIGN_CENTER);
+      display->drawString(125, 100, ">> FALL EVENT <<");
+    } else {
+      sprintf(buffer, "Listening: 923MHz SF9 | Last: %lus ago", 
+              (millis() - (count > 0 ? 0 : millis())) / 1000);
+      display->drawString(2, 100, buffer);
+    }
+    
+  } else {
+    // === No packets yet ===
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(ArialMT_Plain_16);
+    display->drawString(125, 50, "Waiting...");
+    display->setFont(ArialMT_Plain_10);
+    display->drawString(125, 70, "923MHz SF9 BW125");
+  }
   
   display->update(BLACK_BUFFER);
   display->display();
@@ -209,6 +442,14 @@ void forwardToRaspberryPi(uint8_t* data, int length, int rssi, float snr) {
   Serial1.write(0x55);  // End marker
   
   Serial.printf("   → Forwarded to UART (%d bytes)\n", length + 5);
+  
+  // Request time sync every 10 packets
+  static uint32_t lastTimeRequest = 0;
+  if (packetsReceived % 10 == 1 && millis() - lastTimeRequest > 5000) {
+    Serial1.write(0xFE);  // Request time sync
+    lastTimeRequest = millis();
+    Serial.println("   ⏰ Requested time sync from Raspberry Pi");
+  }
 }
 
 // ============================================================================
@@ -292,6 +533,9 @@ void setup() {
 // ============================================================================
 
 void loop() {
+  // Check for time sync from Raspberry Pi
+  checkUartTimeSync();
+  
   int state = radio.getPacketLength();
   
   if (state > 0) {
@@ -304,11 +548,31 @@ void loop() {
       
       packetsReceived++;
       
+      // Parse packet information
+      parsePacketInfo(rxBuffer, len);
+      
       // Print to Serial
       Serial.printf("\n📦 Packet #%lu\n", packetsReceived);
+      Serial.printf("   Type: %d, Device: %s, Frame: %d\n", 
+                    lastPacket.type, lastPacket.deviceId, lastPacket.frameCounter);
       Serial.printf("   Length: %d bytes\n", len);
-      Serial.printf("   RSSI: %d dBm\n", rssi);
-      Serial.printf("   SNR: %.2f dB\n", snr);
+      Serial.printf("   RSSI: %d dBm, SNR: %.2f dB\n", rssi, snr);
+      
+      if (lastPacket.type == 1 || lastPacket.type == 3) {
+        Serial.printf("   HR: %d bpm%s, Temp: %.1f°C%s", 
+                     lastPacket.heartRate,
+                     lastPacket.hrAlert ? " [ABNORMAL]" : "",
+                     lastPacket.temperature,
+                     lastPacket.tempAlert ? " [ABNORMAL]" : "");
+        if (lastPacket.fallDetected) Serial.print(" [FALL]");
+        Serial.println();
+        
+        if (lastPacket.type == 1) {
+          Serial.printf("   Noise: %d dB%s\n", 
+                       lastPacket.noiseLevel,
+                       lastPacket.noiseAlert ? " [TOO LOUD]" : "");
+        }
+      }
       
       Serial.print("   Data: ");
       for (int i = 0; i < min(len, 20); i++) {
@@ -334,7 +598,12 @@ void loop() {
   static uint32_t lastHeartbeat = 0;
   if (millis() - lastHeartbeat > 10000) {
     lastHeartbeat = millis();
-    Serial.printf("[Heartbeat] Running... RX: %lu\n", packetsReceived);
+    updateCurrentTime();
+    Serial.printf("[Heartbeat] Running... RX: %lu", packetsReceived);
+    if (currentTime.valid) {
+      Serial.printf(" Time: %02d:%02d:%02d", currentTime.hour, currentTime.minute, currentTime.second);
+    }
+    Serial.println();
   }
   
   delay(10);
