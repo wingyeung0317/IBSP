@@ -2373,6 +2373,10 @@ const unsigned long REALTIME_TX_INTERVAL = 60000;   // Send realtime data every 
 const unsigned long ECG_TX_INTERVAL = 306000;       // Send ECG data every 306s (5.1 minutes)
 bool fallEventTriggered = false;
 
+// State change tracking for immediate notifications
+FallDetector::FallState previousFallState = FallDetector::NORMAL;
+bool stateChangeNotified = false;
+
 // Maximum noise tracking
 float maxNoisedB = 0.0;  // Track maximum noise level between transmissions
 unsigned long maxNoiseTimestamp = 0;  // When max noise occurred
@@ -2889,6 +2893,80 @@ void loop() {
   }
   
   Serial.println();
+  
+  // ========================================
+  // Check for critical state changes
+  // ========================================
+  // Send immediate realtime packet if state changed to DANGEROUS or returned to NORMAL
+  if (fall_event.state != previousFallState) {
+    if (fall_event.state == FallDetector::DANGEROUS) {
+      Serial.println("\n╔═══════════════════════════════════════════════════════════╗");
+      Serial.println("║  🚨 STATE CHANGE: UNCONSCIOUS - SENDING IMMEDIATE ALERT  ║");
+      Serial.println("╚═══════════════════════════════════════════════════════════╝");
+      stateChangeNotified = true;
+    } else if (previousFallState == FallDetector::DANGEROUS && fall_event.state == FallDetector::NORMAL) {
+      Serial.println("\n╔═══════════════════════════════════════════════════════════╗");
+      Serial.println("║  ✅ STATE CHANGE: RECOVERED - SENDING IMMEDIATE UPDATE   ║");
+      Serial.println("╚═══════════════════════════════════════════════════════════╝");
+      stateChangeNotified = true;
+    }
+    previousFallState = fall_event.state;
+  }
+  
+  // Send immediate realtime packet on critical state change
+  if (stateChangeNotified) {
+    Serial.println("\n📡 Sending immediate realtime packet (State Change Alert)...");
+    
+    uint8_t payload[10];
+    
+    // Check alert conditions
+    uint8_t hrStatus = ecgMonitor.checkHeartRate();
+    uint8_t tempStatus = tempSensor.checkTempStatus();
+    bool hrAbnormal = (hrStatus != 0);
+    bool tempAbnormal = (tempStatus >= 3);
+    bool fallAlert = (fall_event.state >= FallDetector::FALL_DETECTED);
+    bool noiseAlert = (maxNoisedB >= 80.0);  // Noise alert threshold
+    
+    // Use current or max noise level
+    float noiseToSend = (maxNoisedB > 0) ? maxNoisedB : soundLevel;
+    
+    int len = PayloadBuilder::buildRealtimePayload(
+      payload,
+      ecgMonitor.getBPM(),
+      tempSensor.currentTemp,
+      tempSensor.ambientTemp,
+      noiseToSend,
+      (uint8_t)fall_event.state,
+      hrAbnormal,
+      tempAbnormal,
+      fallAlert,
+      noiseAlert
+    );
+    
+    bool success = loraComm.sendUplink(1, payload, len);
+    
+    if (success) {
+      Serial.println("✅ Immediate packet sent successfully!");
+      Serial.print("State: ");
+      if (fall_event.state == FallDetector::DANGEROUS) {
+        Serial.println("UNCONSCIOUS");
+      } else {
+        Serial.println("RECOVERED");
+      }
+      Serial.print("BPM: ");
+      Serial.print(ecgMonitor.getBPM());
+      Serial.print("  Temp: ");
+      Serial.print(tempSensor.currentTemp, 1);
+      Serial.print("°C  Noise: ");
+      Serial.print(noiseToSend, 1);
+      Serial.println("dB");
+    } else {
+      Serial.println("❌ Failed to send immediate packet");
+    }
+    
+    stateChangeNotified = false;  // Reset flag
+    Serial.println();
+  }
   
   // ========================================
   // WiFi Data Transmission

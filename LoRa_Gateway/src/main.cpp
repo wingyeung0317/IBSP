@@ -74,6 +74,7 @@ struct {
   int8_t heartRate;
   float temperature;
   uint8_t noiseLevel;
+  uint8_t fallState;  // 0=Normal, 1=Warning, 2=Fall, 3=DANGEROUS/Unconscious, 4=Recovery
   bool fallDetected;
   bool noiseAlert;
   bool hrAlert;
@@ -145,7 +146,8 @@ void parsePacketInfo(uint8_t* data, int length) {
     lastPacket.temperature = ((tempEncoded / 255.0) * 100.0) - 20.0;
     // Skip ambient temp (byte 16)
     lastPacket.noiseLevel = data[17];  // Byte 4 of payload
-    lastPacket.fallDetected = (data[18] > 0);  // Byte 5 = fall_state
+    lastPacket.fallState = data[18];   // Byte 5 = fall_state (0-4)
+    lastPacket.fallDetected = (lastPacket.fallState >= 2);  // Fall, Dangerous, or Recovery
     
     // Extract alert flags (byte 6 of payload = byte 19 of packet)
     uint8_t alertFlags = data[19];
@@ -159,6 +161,7 @@ void parsePacketInfo(uint8_t* data, int length) {
     lastPacket.heartRate = -1;  // Unknown
     lastPacket.temperature = 0;
     lastPacket.noiseLevel = 0;
+    lastPacket.fallState = 0;
     lastPacket.fallDetected = false;
     
   } else if (lastPacket.type == 3 && length >= 58) {
@@ -168,6 +171,7 @@ void parsePacketInfo(uint8_t* data, int length) {
     uint8_t tempEncoded = data[41];
     lastPacket.temperature = ((tempEncoded / 255.0) * 100.0) - 20.0;
     lastPacket.noiseLevel = 0;  // Not included in fall event
+    lastPacket.fallState = 2;  // Fall detected
     lastPacket.fallDetected = true;
   }
 }
@@ -390,7 +394,12 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
     display->drawString(130, 58, buffer);
     
     // Alert status
-    if (lastPacket.fallDetected) {
+    if (lastPacket.fallState == 3) {
+      // DANGEROUS - Unconscious/Immobile
+      display->setFont(ArialMT_Plain_16);
+      display->drawString(130, 68, "UNCONSCIOUS!");
+      display->setFont(ArialMT_Plain_10);
+    } else if (lastPacket.fallDetected) {
       display->setFont(ArialMT_Plain_16);
       display->drawString(130, 72, "**FALL**");
       display->setFont(ArialMT_Plain_10);
@@ -405,7 +414,12 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
     // === Bottom status bar ===
     display->drawHorizontalLine(0, 96, 250);
     
-    if (lastPacket.fallDetected && lastPacket.type == 3) {
+    if (lastPacket.fallState == 3) {
+      // Critical: Unconscious warning
+      display->setFont(ArialMT_Plain_16);
+      display->setTextAlignment(TEXT_ALIGN_CENTER);
+      display->drawString(125, 100, "!! UNCONSCIOUS !!");
+    } else if (lastPacket.fallDetected && lastPacket.type == 3) {
       display->setFont(ArialMT_Plain_16);
       display->setTextAlignment(TEXT_ALIGN_CENTER);
       display->drawString(125, 100, ">> FALL EVENT <<");
