@@ -2552,32 +2552,23 @@ void setup() {
   Serial.println("========================================\n");
   
   // ========================================
-  // WiFi Initialization
+  // LoRa Initialization
   // ========================================
   
-  Serial.println("Initializing WiFi...");
-  if (!wifiComm.begin()) {
-    Serial.println("ERROR: WiFi initialization failed!");
-    Serial.println("System will continue without WiFi.");
+  Serial.println("Initializing LoRa...");
+  if (!loraComm.begin()) {
+    Serial.println("ERROR: LoRa initialization failed!");
+    Serial.println("System halted. Check wiring and restart.");
+    while(1) delay(1000);  // Halt - LoRa is critical
   } else {
-    // Attempt to connect to WiFi
+    Serial.println("✅ LoRa initialized successfully!");
     Serial.println("\n========================================");
-    Serial.println("  WIFI CONNECTION PROCEDURE");
+    Serial.println("  LORA READY");
     Serial.println("========================================");
-    Serial.println("Attempting to connect to WiFi hotspot...");
-    Serial.println("Please ensure:");
-    Serial.println("  1. Hotspot is enabled on your phone");
-    Serial.println("  2. SSID and password are correct");
-    Serial.println("  3. 2.4GHz band is enabled");
-    Serial.println("  4. Device is within range");
+    Serial.println("Frequency: 923 MHz (Hong Kong AS923)");
+    Serial.println("Spreading Factor: 9");
+    Serial.println("Bandwidth: 125 kHz");
     Serial.println("========================================\n");
-    
-    if (!wifiComm.connect()) {
-      Serial.println("\n========================================");
-      Serial.println("  ⚠️  WIFI CONNECTION FAILED  ⚠️");
-      Serial.println("========================================");
-      Serial.println("System will continue without WiFi.\n");
-    }
   }
   
   Serial.println("\n========================================");
@@ -2906,7 +2897,8 @@ void loop() {
   // LoRa doesn't need connection maintenance
   // loraComm.maintain();
   
-  if (wifiComm.isJoined()) {
+  // LoRa is always ready (no join procedure needed)
+  // Proceed directly to sensor monitoring and transmission
     // Send fall event immediately (Packet Type 0x03)
     if (fall_event.confirmed && !fallEventTriggered) {
       Serial.println("\n╔══════════════════════════════════════════════════════════╗");
@@ -2986,10 +2978,10 @@ void loop() {
       Serial.println();
       
       Serial.println("\n📡 TRANSMISSION STATUS:");
-      Serial.print("  → Sending to server...");
+      Serial.print("  → Sending via LoRa...");
       
       unsigned long txStart = millis();
-      bool success = wifiComm.sendUplink(3, payload, len, true);
+      bool success = loraComm.sendUplink(3, payload, len, true);
       unsigned long txDuration = millis() - txStart;
       
       if (success) {
@@ -2998,9 +2990,9 @@ void loop() {
         Serial.print(txDuration);
         Serial.println(" ms");
         Serial.print("  📊 Frame counter: ");
-        Serial.println(wifiComm.getFrameCounter());
-        Serial.print("  📶 WiFi RSSI: ");
-        Serial.print(wifiComm.getRSSI());
+        Serial.println(loraComm.getFrameCounter());
+        Serial.print("  📶 LoRa RSSI: ");
+        Serial.print(loraComm.getRSSI());
         Serial.println(" dBm");
         Serial.println("  ℹ️  Fall events are sent immediately when detected");
         fallEventTriggered = true;
@@ -3118,10 +3110,10 @@ void loop() {
       Serial.println();
       
       Serial.println("\n📡 TRANSMISSION STATUS:");
-      Serial.print("  → Sending to server...");
+      Serial.print("  → Sending via LoRa...");
       
       unsigned long txStart = millis();
-      bool success = wifiComm.sendUplink(1, payload, len, false);
+      bool success = loraComm.sendUplink(1, payload, len, false);
       unsigned long txDuration = millis() - txStart;
       
       if (success) {
@@ -3130,9 +3122,9 @@ void loop() {
         Serial.print(txDuration);
         Serial.println(" ms");
         Serial.print("  📊 Frame counter: ");
-        Serial.println(wifiComm.getFrameCounter());
-        Serial.print("  📶 WiFi RSSI: ");
-        Serial.print(wifiComm.getRSSI());
+        Serial.println(loraComm.getFrameCounter());
+        Serial.print("  📶 LoRa RSSI: ");
+        Serial.print(loraComm.getRSSI());
         Serial.println(" dBm");
         Serial.print("  🕒 Next transmission: ");
         Serial.println(formatTimeRemaining(REALTIME_TX_INTERVAL));
@@ -3221,10 +3213,10 @@ void loop() {
         }
         
         Serial.println("\n📡 TRANSMISSION STATUS:");
-        Serial.print("  → Sending to server...");
+        Serial.print("  → Sending via LoRa...");
         
         unsigned long txStart = millis();
-        bool success = wifiComm.sendUplink(2, payload, len, false);
+        bool success = loraComm.sendUplink(2, payload, len, false);
         unsigned long txDuration = millis() - txStart;
         
         if (success) {
@@ -3233,9 +3225,9 @@ void loop() {
           Serial.print(txDuration);
           Serial.println(" ms");
           Serial.print("  📊 Frame counter: ");
-          Serial.println(wifiComm.getFrameCounter());
-          Serial.print("  📶 WiFi RSSI: ");
-          Serial.print(wifiComm.getRSSI());
+          Serial.println(loraComm.getFrameCounter());
+          Serial.print("  📶 LoRa RSSI: ");
+          Serial.print(loraComm.getRSSI());
           Serial.println(" dBm");
           Serial.print("  📈 Data rate: ");
           Serial.print((len * 8.0 / txDuration * 1000.0), 0);
@@ -3253,7 +3245,7 @@ void loop() {
         Serial.println("╚══════════════════════════════════════════════════════════╝\n");
       }
     }
-  }
+  // LoRa transmission complete - continue monitoring
   
   // Wait before next reading
   delay(READ_INTERVAL_MS);
