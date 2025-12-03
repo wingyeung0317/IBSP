@@ -134,6 +134,33 @@ function App() {
     setSnackbarOpen(true);
   };
 
+  const handleClearHistory = async () => {
+    if (!window.confirm('🔄 重置追蹤點？\n\n這將讓儀表板只顯示從現在開始的新數據。\n歷史記錄會保留在資料庫中，但不會在圖表中顯示。')) {
+      return;
+    }
+
+    try {
+      await axios.post(`${API_URL}/api/tracking/reset/${selectedDevice}`);
+      setSnackbarMessage('✅ 追蹤點已重置！從現在開始記錄新數據。');
+      setSnackbarOpen(true);
+      
+      // Clear local state
+      setRealtimeData([]);
+      setEcgData(null);
+      setFallAlerts([]);
+      
+      // Refresh data after a short delay
+      setTimeout(() => {
+        fetchData();
+      }, 500);
+      
+    } catch (err) {
+      console.error('Error resetting tracking:', err);
+      setSnackbarMessage('❌ 重置失敗，請重試。');
+      setSnackbarOpen(true);
+    }
+  };
+
   const handleAcknowledgeAlerts = async () => {
     try {
       // Acknowledge all pending fall alerts
@@ -169,6 +196,14 @@ function App() {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             🏥 Health Monitoring Dashboard
           </Typography>
+          <Button 
+            color="inherit" 
+            onClick={handleClearHistory}
+            startIcon={<RestartAlt />}
+            sx={{ mr: 2 }}
+          >
+            Reset Panel
+          </Button>
           <IconButton 
             color="inherit" 
             onClick={handleReset}
@@ -531,6 +566,15 @@ function App() {
           </Typography>
         </Box>
       </Container>
+
+      {/* Snackbar for notifications */}
+      <Snackbar
+        open={snackbarOpen}
+        autoHideDuration={3000}
+        onClose={handleSnackbarClose}
+        message={snackbarMessage}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
     </div>
   );
 }

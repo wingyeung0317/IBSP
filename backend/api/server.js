@@ -7,6 +7,10 @@ const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Store tracking start time for each device (in-memory)
+// Format: { 'device_id': timestamp }
+const deviceTrackingStartTime = {};
+
 // PostgreSQL connection pool
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
@@ -260,13 +264,24 @@ app.get('/api/realtime/:device_id', async (req, res) => {
   const limit = req.query.limit || 100;
   
   try {
-    const result = await pool.query(
-      `SELECT * FROM realtime_data 
-       WHERE device_id = $1 
-       ORDER BY timestamp DESC 
-       LIMIT $2`,
-      [device_id, limit]
-    );
+    const startTime = deviceTrackingStartTime[device_id];
+    let query, params;
+    
+    if (startTime) {
+      query = `SELECT * FROM realtime_data 
+               WHERE device_id = $1 AND timestamp >= $2
+               ORDER BY timestamp DESC 
+               LIMIT $3`;
+      params = [device_id, startTime, limit];
+    } else {
+      query = `SELECT * FROM realtime_data 
+               WHERE device_id = $1 
+               ORDER BY timestamp DESC 
+               LIMIT $2`;
+      params = [device_id, limit];
+    }
+    
+    const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching realtime data:', error);
@@ -280,13 +295,24 @@ app.get('/api/ecg/:device_id', async (req, res) => {
   const limit = req.query.limit || 50;
   
   try {
-    const result = await pool.query(
-      `SELECT * FROM ecg_data 
-       WHERE device_id = $1 
-       ORDER BY timestamp DESC 
-       LIMIT $2`,
-      [device_id, limit]
-    );
+    const startTime = deviceTrackingStartTime[device_id];
+    let query, params;
+    
+    if (startTime) {
+      query = `SELECT * FROM ecg_data 
+               WHERE device_id = $1 AND timestamp >= $2
+               ORDER BY timestamp DESC 
+               LIMIT $3`;
+      params = [device_id, startTime, limit];
+    } else {
+      query = `SELECT * FROM ecg_data 
+               WHERE device_id = $1 
+               ORDER BY timestamp DESC 
+               LIMIT $2`;
+      params = [device_id, limit];
+    }
+    
+    const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching ECG data:', error);
@@ -300,13 +326,24 @@ app.get('/api/falls/:device_id', async (req, res) => {
   const limit = req.query.limit || 50;
   
   try {
-    const result = await pool.query(
-      `SELECT * FROM fall_events 
-       WHERE device_id = $1 
-       ORDER BY timestamp DESC 
-       LIMIT $2`,
-      [device_id, limit]
-    );
+    const startTime = deviceTrackingStartTime[device_id];
+    let query, params;
+    
+    if (startTime) {
+      query = `SELECT * FROM fall_events 
+               WHERE device_id = $1 AND timestamp >= $2
+               ORDER BY timestamp DESC 
+               LIMIT $3`;
+      params = [device_id, startTime, limit];
+    } else {
+      query = `SELECT * FROM fall_events 
+               WHERE device_id = $1 
+               ORDER BY timestamp DESC 
+               LIMIT $2`;
+      params = [device_id, limit];
+    }
+    
+    const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching fall events:', error);
@@ -317,8 +354,17 @@ app.get('/api/falls/:device_id', async (req, res) => {
 // Get pending fall alerts
 app.get('/api/falls/alerts/pending', async (req, res) => {
   try {
+    // Get all pending alerts and filter by tracking start time if exists
     const result = await pool.query('SELECT * FROM pending_fall_alerts');
-    res.json(result.rows);
+    
+    // Filter by device tracking start time
+    const filteredAlerts = result.rows.filter(alert => {
+      const startTime = deviceTrackingStartTime[alert.device_id];
+      if (!startTime) return true;
+      return new Date(alert.timestamp) >= new Date(startTime);
+    });
+    
+    res.json(filteredAlerts);
   } catch (error) {
     console.error('Error fetching pending alerts:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -341,6 +387,85 @@ app.patch('/api/falls/:fall_id/status', async (req, res) => {
   } catch (error) {
     console.error('Error updating fall status:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Acknowledge fall alert
+app.put('/api/falls/:fall_id/acknowledge', async (req, res) => {
+  const { fall_id } = req.params;
+  
+  try {
+    await pool.query(
+      `UPDATE fall_events 
+       SET response_status = 'acknowledged', response_time = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [fall_id]
+    );
+    res.json({ status: 'success', message: 'Alert acknowledged' });
+  } catch (error) {
+    console.error('Error acknowledging fall alert:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Set tracking start time (reset panel view without deleting data)
+app.post('/api/tracking/reset/:device_id', async (req, res) => {
+  const { device_id } = req.params;
+  
+  try {
+    const now = new Date().toISOString();
+    deviceTrackingStartTime[device_id] = now;
+    
+    console.log(`🔄 Reset tracking start time for ${device_id} to ${now}`);
+    
+    res.json({ 
+      status: 'success', 
+      message: `Tracking reset for device ${device_id}. Dashboard will show data from now onwards.`,
+      tracking_start_time: now
+    });
+    
+  } catch (error) {
+    console.error('Error resetting tracking time:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// Get tracking start time for a device
+app.get('/api/tracking/:device_id', async (req, res) => {
+  const { device_id } = req.params;
+  
+  try {
+    const startTime = deviceTrackingStartTime[device_id];
+    
+    res.json({ 
+      device_id,
+      tracking_start_time: startTime || null,
+      is_tracking_filtered: !!startTime
+    });
+    
+  } catch (error) {
+    console.error('Error getting tracking time:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// Clear tracking filter (show all historical data again)
+app.delete('/api/tracking/reset/:device_id', async (req, res) => {
+  const { device_id } = req.params;
+  
+  try {
+    delete deviceTrackingStartTime[device_id];
+    
+    console.log(`♻️  Removed tracking filter for ${device_id}. Showing all historical data.`);
+    
+    res.json({ 
+      status: 'success', 
+      message: `Tracking filter removed for device ${device_id}. Dashboard will show all historical data.`
+    });
+    
+  } catch (error) {
+    console.error('Error clearing tracking filter:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 
@@ -406,12 +531,15 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`📡 Listening on port ${PORT}`);
   console.log(`🗄️  Database: ${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}`);
   console.log(`\n📋 Available endpoints:`);
-  console.log(`   POST /api/sensor-data - Receive data from ESP32`);
-  console.log(`   GET  /api/vitals/latest - Get latest vitals`);
-  console.log(`   GET  /api/realtime/:device_id - Get real-time data`);
-  console.log(`   GET  /api/ecg/:device_id - Get ECG data`);
-  console.log(`   GET  /api/falls/:device_id - Get fall events`);
-  console.log(`   GET  /api/devices - List all devices`);
+  console.log(`   POST   /api/sensor-data - Receive data from ESP32`);
+  console.log(`   GET    /api/vitals/latest - Get latest vitals`);
+  console.log(`   GET    /api/realtime/:device_id - Get real-time data`);
+  console.log(`   GET    /api/ecg/:device_id - Get ECG data`);
+  console.log(`   GET    /api/falls/:device_id - Get fall events`);
+  console.log(`   GET    /api/devices - List all devices`);
+  console.log(`   POST   /api/tracking/reset/:device_id - Reset tracking start time`);
+  console.log(`   GET    /api/tracking/:device_id - Get tracking info`);
+  console.log(`   DELETE /api/tracking/reset/:device_id - Clear tracking filter`);
   console.log(`\n✨ Server ready!\n`);
 });
 
