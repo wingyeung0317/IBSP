@@ -2899,12 +2899,17 @@ void loop() {
   // ========================================
   // Send immediate realtime packet if state changed to DANGEROUS or returned to NORMAL
   if (fall_event.state != previousFallState) {
-    if (fall_event.state == FallDetector::DANGEROUS) {
+    if (fall_event.state == FallDetector::FALL_DETECTED) {
+      Serial.println("\n╔═══════════════════════════════════════════════════════════╗");
+      Serial.println("║  ⚠️  STATE CHANGE: FALL DETECTED - SENDING IMMEDIATE ALERT ║");
+      Serial.println("╚═══════════════════════════════════════════════════════════╝");
+      stateChangeNotified = true;
+    } else if (fall_event.state == FallDetector::DANGEROUS) {
       Serial.println("\n╔═══════════════════════════════════════════════════════════╗");
       Serial.println("║  🚨 STATE CHANGE: UNCONSCIOUS - SENDING IMMEDIATE ALERT  ║");
       Serial.println("╚═══════════════════════════════════════════════════════════╝");
       stateChangeNotified = true;
-    } else if (previousFallState == FallDetector::DANGEROUS && fall_event.state == FallDetector::NORMAL) {
+    } else if ((previousFallState == FallDetector::FALL_DETECTED || previousFallState == FallDetector::DANGEROUS) && fall_event.state == FallDetector::NORMAL) {
       Serial.println("\n╔═══════════════════════════════════════════════════════════╗");
       Serial.println("║  ✅ STATE CHANGE: RECOVERED - SENDING IMMEDIATE UPDATE   ║");
       Serial.println("╚═══════════════════════════════════════════════════════════╝");

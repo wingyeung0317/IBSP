@@ -71,6 +71,7 @@ struct {
   uint8_t type;  // 1=Realtime, 2=ECG, 3=Fall
   char deviceId[11];
   uint16_t frameCounter;
+  uint16_t lastFrameCounter;  // Track previous frame counter
   int8_t heartRate;
   float temperature;
   uint8_t noiseLevel;
@@ -79,7 +80,7 @@ struct {
   bool noiseAlert;
   bool hrAlert;
   bool tempAlert;
-} lastPacket = {0, "", 0, 0, 0.0, 0, false, false, false, false};
+} lastPacket = {0, "", 0, 0, 0, 0.0, 0, false, false, false, false};
 
 // ============================================================================
 // TIME SYNC & PACKET PARSING
@@ -307,7 +308,7 @@ void initDisplay() {
   }
 }
 
-void updateDisplay(int rssi, float snr, int length, uint32_t count) {
+void updateDisplay(int rssi, float snr, int length, uint32_t count, bool isNewPacket, bool hasAlert) {
   if (!displayAvailable || !display) return;
   
   updateCurrentTime();
@@ -438,7 +439,10 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
     display->drawString(125, 70, "923MHz SF9 BW125");
   }
   
-  display->update(BLACK_BUFFER);
+  // Only update BLACK_BUFFER when it's a new packet AND has alert
+  if (isNewPacket && hasAlert) {
+    display->update(BLACK_BUFFER);
+  }
   display->display();
 }
 
@@ -536,7 +540,7 @@ void setup() {
   
   // Update display - ready state
   if (displayAvailable) {
-    updateDisplay(0, 0, 0, 0);
+    updateDisplay(0, 0, 0, 0, false, false);
   }
   
   Serial.println("\n🎧 Listening for packets...\n");
@@ -565,8 +569,29 @@ void loop() {
       // Parse packet information
       parsePacketInfo(rxBuffer, len);
       
+      // Check if this is a new packet (different frame counter)
+      bool isNewPacket = (lastPacket.frameCounter != lastPacket.lastFrameCounter);
+      
+      // Update last frame counter
+      lastPacket.lastFrameCounter = lastPacket.frameCounter;
+      
+      // Check if there's any alert condition
+      bool hasAlert = lastPacket.fallDetected || 
+                      lastPacket.noiseAlert || 
+                      lastPacket.hrAlert || 
+                      lastPacket.tempAlert ||
+                      (lastPacket.fallState == 3);  // Unconscious state
+      
       // Print to Serial
-      Serial.printf("\n📦 Packet #%lu\n", packetsReceived);
+      Serial.printf("\n📦 Packet #%lu", packetsReceived);
+      if (!isNewPacket) {
+        Serial.print(" [OLD/RETRANSMIT]");
+      }
+      if (hasAlert) {
+        Serial.print(" [ALERT]");
+      }
+      Serial.println();
+      
       Serial.printf("   Type: %d, Device: %s, Frame: %d\n", 
                     lastPacket.type, lastPacket.deviceId, lastPacket.frameCounter);
       Serial.printf("   Length: %d bytes\n", len);
@@ -598,8 +623,16 @@ void loop() {
       // Forward to Raspberry Pi via UART
       forwardToRaspberryPi(rxBuffer, len, rssi, snr);
       
-      // Update E-ink display
-      updateDisplay(rssi, snr, len, packetsReceived);
+      // Update E-ink display (BLACK_BUFFER only updated for new packets with alerts)
+      updateDisplay(rssi, snr, len, packetsReceived, isNewPacket, hasAlert);
+      
+      if (isNewPacket && hasAlert) {
+        Serial.println("   🖥️  Display BLACK_BUFFER updated (new packet + alert)");
+      } else if (!isNewPacket) {
+        Serial.println("   🖥️  Display refreshed (old packet, BLACK_BUFFER unchanged)");
+      } else {
+        Serial.println("   🖥️  Display refreshed (no alert, BLACK_BUFFER unchanged)");
+      }
       
     } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
       Serial.printf("❌ Read error: %d\n", state);
