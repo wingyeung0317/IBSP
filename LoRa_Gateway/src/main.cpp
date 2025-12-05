@@ -6,7 +6,6 @@
 #include <Arduino.h>
 #include <RadioLib.h>
 #include "HT_E0213A367.h"
-#include <Adafruit_GFX.h>
 
 // Vext Power Control (Active HIGH for Vision Master E213)
 #define Vext 18
@@ -52,6 +51,9 @@ uint8_t rxBuffer[256];
 bool displayAvailable = false;
 int displayWidth = 250;
 int displayHeight = 122;
+bool needsFullRefresh = true;  // Flag for full refresh on first display
+unsigned long lastPacketMillis = 0;  // Last packet received time
+uint16_t lastFrameCounter = 0;  // Track last frame counter to detect new packets
 
 // Time sync
 struct {
@@ -211,7 +213,7 @@ void checkUartTimeSync() {
 void VextON() {
   pinMode(Vext, OUTPUT);
   digitalWrite(Vext, HIGH);  // Active HIGH
-  delay(100);
+  delay(1500);
 }
 
 void VextOFF() {
@@ -291,9 +293,11 @@ void initDisplay() {
     display->drawString(10, 70, "LoRa: 923MHz SF9");
     display->drawString(10, 85, "Initializing...");
     
-    display->update();
+    display->update(BLACK_BUFFER);
     display->display();
     delay(100);
+    
+    needsFullRefresh = true;  // Next update will do full refresh
     
     Serial.println("✅ Display initialized");
     displayAvailable = true;
@@ -308,134 +312,267 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
   
   updateCurrentTime();
   
-  display->clear();
-  
-  // === Header: Time and Title ===
-  display->setTextAlignment(TEXT_ALIGN_LEFT);
-  display->setFont(ArialMT_Plain_10);
-  
-  if (currentTime.valid) {
-    char timeStr[20];
-    sprintf(timeStr, "%02d:%02d:%02d", currentTime.hour, currentTime.minute, currentTime.second);
-    display->drawString(2, 0, timeStr);
+  // First time or critical alert - do full refresh
+  if (needsFullRefresh || (lastPacket.fallState == 3) || 
+      (lastPacket.fallDetected && lastPacket.type == 3)) {
+    
+    display->clear();
+    
+    // === Header: Time and Title ===
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->setFont(ArialMT_Plain_10);
+    
+    if (currentTime.valid) {
+      char timeStr[20];
+      sprintf(timeStr, "%02d:%02d:%02d", currentTime.hour, currentTime.minute, currentTime.second);
+      display->drawString(2, 0, timeStr);
+    } else {
+      display->drawString(2, 0, "--:--:--");
+    }
+    
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(ArialMT_Plain_16);
+    display->drawString(125, 0, "LoRa Gateway");
+    
+    // === Line separator ===
+    display->drawHorizontalLine(0, 18, 250);
+    
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->setFont(ArialMT_Plain_10);
+    char buffer[60];
+    
+    if (count > 0) {
+      // === LEFT COLUMN (0-120) ===
+      
+      // Packet type
+      const char* typeStr = "Unknown";
+      if (lastPacket.type == 1) typeStr = "Realtime";
+      else if (lastPacket.type == 2) typeStr = "ECG";
+      else if (lastPacket.type == 3) typeStr = "FALL";
+      
+      sprintf(buffer, "Type:%s", typeStr);
+      display->drawString(2, 22, buffer);
+      
+      // Device ID
+      sprintf(buffer, "Dev:%.8s", lastPacket.deviceId);
+      display->drawString(2, 34, buffer);
+      
+      // Frame number
+      sprintf(buffer, "Frame:#%d", lastPacket.frameCounter);
+      display->drawString(2, 46, buffer);
+      
+      // Health data
+      if (lastPacket.type == 1 || lastPacket.type == 3) {
+        sprintf(buffer, "HR:%d%s bpm", 
+                lastPacket.heartRate,
+                lastPacket.hrAlert ? "!" : "");
+        display->drawString(2, 58, buffer);
+        
+        sprintf(buffer, "Temp:%.1f%sC", 
+                lastPacket.temperature,
+                lastPacket.tempAlert ? "!" : "");
+        display->drawString(2, 70, buffer);
+        
+        if (lastPacket.type == 1) {
+          sprintf(buffer, "Noise:%ddB%s", 
+                  lastPacket.noiseLevel,
+                  lastPacket.noiseAlert ? "!" : "");
+          display->drawString(2, 82, buffer);
+        }
+      }
+      
+      // === RIGHT COLUMN (130-248) ===
+      
+      // Signal quality
+      sprintf(buffer, "RSSI:%ddBm", rssi);
+      display->drawString(130, 22, buffer);
+      
+      sprintf(buffer, "SNR:%.1fdB", snr);
+      display->drawString(130, 34, buffer);
+      
+      // Packet stats
+      sprintf(buffer, "Size:%dB", length);
+      display->drawString(130, 46, buffer);
+      
+      unsigned long uptime = millis() / 1000;
+      unsigned long hours = uptime / 3600;
+      unsigned long minutes = (uptime % 3600) / 60;
+      unsigned long seconds = uptime % 60;
+      sprintf(buffer, "Up:%luh%02lum%02lus", hours, minutes, seconds);
+      display->drawString(130, 58, buffer);
+      
+      // Alert status
+      if (lastPacket.fallState == 3) {
+        // DANGEROUS - Unconscious/Immobile
+        display->setFont(ArialMT_Plain_16);
+        display->drawString(130, 68, "UNCONSCIOUS!");
+        display->setFont(ArialMT_Plain_10);
+      } else if (lastPacket.fallDetected) {
+        display->setFont(ArialMT_Plain_16);
+        display->drawString(130, 72, "**FALL**");
+        display->setFont(ArialMT_Plain_10);
+      } else if (lastPacket.noiseAlert) {
+        display->drawString(130, 70, "LOUD!");
+      }  else {
+        display->drawString(130, 70, "Normal");
+      }
+      
+      // === Bottom status bar ===
+      display->drawHorizontalLine(0, 96, 250);
+      
+      if (lastPacket.fallState == 3) {
+        // Critical: Unconscious warning
+        display->setFont(ArialMT_Plain_16);
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->drawString(125, 100, "!! UNCONSCIOUS !!");
+      } else if (lastPacket.fallDetected && lastPacket.type == 3) {
+        display->setFont(ArialMT_Plain_16);
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->drawString(125, 100, ">> FALL EVENT <<");
+      } else {
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+        display->setFont(ArialMT_Plain_10);
+        sprintf(buffer, "Listening: 923MHz SF9");
+        display->drawString(2, 100, buffer);
+        
+        // Show last packet time in right corner
+        if (lastPacketMillis > 0) {
+          unsigned long elapsed = (millis() - lastPacketMillis) / 1000;
+          display->setTextAlignment(TEXT_ALIGN_RIGHT);
+          if (elapsed < 60) {
+            sprintf(buffer, "RX: %lus ago", elapsed);
+          } else if (elapsed < 3600) {
+            sprintf(buffer, "RX: %lum ago", elapsed / 60);
+          } else {
+            sprintf(buffer, "RX: %luh ago", elapsed / 3600);
+          }
+          display->drawString(248, 100, buffer);
+        }
+      }
+      
+    } else {
+      // === No packets yet ===
+      display->setTextAlignment(TEXT_ALIGN_CENTER);
+      display->setFont(ArialMT_Plain_16);
+      display->drawString(125, 50, "Waiting...");
+      display->setFont(ArialMT_Plain_10);
+      display->drawString(125, 70, "923MHz SF9 BW125");
+    }
+    
+    display->update(BLACK_BUFFER);
+    display->display();  // Full refresh
+    delay(3000);
+
+    if(lastPacket.fallDetected){
+      needsFullRefresh = true;
+    }else{
+      needsFullRefresh = false;
+    }
+    
   } else {
-    display->drawString(2, 0, "--:--:--");
-  }
-  
-  display->setTextAlignment(TEXT_ALIGN_CENTER);
-  display->setFont(ArialMT_Plain_16);
-  display->drawString(125, 0, "LoRa Gateway");
-  
-  // === Line separator ===
-  display->drawHorizontalLine(0, 18, 250);
-  
-  display->setTextAlignment(TEXT_ALIGN_LEFT);
-  display->setFont(ArialMT_Plain_10);
-  char buffer[60];
-  
-  if (count > 0) {
-    // === LEFT COLUMN (0-120) ===
+    // Partial refresh - only update dynamic content
+    // This is much faster and reduces flicker
     
-    // Packet type
-    const char* typeStr = "Unknown";
-    if (lastPacket.type == 1) typeStr = "Realtime";
-    else if (lastPacket.type == 2) typeStr = "ECG";
-    else if (lastPacket.type == 3) typeStr = "FALL";
+    display->setColor(BLACK);  // Clear area
+    display->fillRect(2, 0, 60, 12);  // Time area
+    display->setColor(WHITE);
     
-    sprintf(buffer, "Type:%s", typeStr);
-    display->drawString(2, 22, buffer);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->setFont(ArialMT_Plain_10);
     
-    // Device ID
-    sprintf(buffer, "Dev:%.8s", lastPacket.deviceId);
-    display->drawString(2, 34, buffer);
+    // Update time
+    if (currentTime.valid) {
+      char timeStr[20];
+      sprintf(timeStr, "%02d:%02d:%02d", currentTime.hour, currentTime.minute, currentTime.second);
+      display->drawString(2, 0, timeStr);
+    } else {
+      display->drawString(2, 0, "--:--:--");
+    }
     
-    // Frame number
-    sprintf(buffer, "Frame:#%d", lastPacket.frameCounter);
-    display->drawString(2, 46, buffer);
+    // Update dynamic data fields
+    char buffer[60];
     
-    // Health data
-    if (lastPacket.type == 1 || lastPacket.type == 3) {
-      sprintf(buffer, "HR:%d%s bpm", 
-              lastPacket.heartRate,
-              lastPacket.hrAlert ? "!" : "");
-      display->drawString(2, 58, buffer);
+    if (count > 0) {
+      // Clear and update left column data
+      display->setColor(BLACK);
+      display->fillRect(2, 46, 120, 48);  // Frame, HR, Temp, Noise area
+      display->setColor(WHITE);
       
-      sprintf(buffer, "Temp:%.1f%sC", 
-              lastPacket.temperature,
-              lastPacket.tempAlert ? "!" : "");
-      display->drawString(2, 70, buffer);
+      sprintf(buffer, "Frame:#%d", lastPacket.frameCounter);
+      display->drawString(2, 46, buffer);
       
-      if (lastPacket.type == 1) {
-        sprintf(buffer, "Noise:%ddB%s", 
-                lastPacket.noiseLevel,
-                lastPacket.noiseAlert ? "!" : "");
-        display->drawString(2, 82, buffer);
+      if (lastPacket.type == 1 || lastPacket.type == 3) {
+        sprintf(buffer, "HR:%d%s bpm", 
+                lastPacket.heartRate,
+                lastPacket.hrAlert ? "!" : "");
+        display->drawString(2, 58, buffer);
+        
+        sprintf(buffer, "Temp:%.1f%sC", 
+                lastPacket.temperature,
+                lastPacket.tempAlert ? "!" : "");
+        display->drawString(2, 70, buffer);
+        
+        if (lastPacket.type == 1) {
+          sprintf(buffer, "Noise:%ddB%s", 
+                  lastPacket.noiseLevel,
+                  lastPacket.noiseAlert ? "!" : "");
+          display->drawString(2, 82, buffer);
+        }
+      }
+      
+      // Clear and update right column
+      display->setColor(BLACK);
+      display->fillRect(130, 22, 118, 72);  // Signal and status area
+      display->setColor(WHITE);
+      
+      sprintf(buffer, "RSSI:%ddBm", rssi);
+      display->drawString(130, 22, buffer);
+      
+      sprintf(buffer, "SNR:%.1fdB", snr);
+      display->drawString(130, 34, buffer);
+      
+      sprintf(buffer, "Size:%dB", length);
+      display->drawString(130, 46, buffer);
+      
+      unsigned long uptime = millis() / 1000;
+      unsigned long hours = uptime / 3600;
+      unsigned long minutes = (uptime % 3600) / 60;
+      unsigned long seconds = uptime % 60;
+      sprintf(buffer, "Up:%luh%02lum%02lus", hours, minutes, seconds);
+      display->drawString(130, 58, buffer);
+      
+      // Alert status
+      if (lastPacket.noiseAlert) {
+        display->drawString(130, 70, "LOUD!");
+      } else if (lastPacket.hrAlert || lastPacket.tempAlert) {
+        display->drawString(130, 70, "Alert!");
+      } else {
+        display->drawString(130, 70, "Normal");
+      }
+      
+      // Update bottom status bar - last packet time
+      display->setColor(BLACK);
+      display->fillRect(150, 100, 98, 12);  // Clear right side of status bar
+      display->setColor(WHITE);
+      
+      if (lastPacketMillis > 0) {
+        unsigned long elapsed = (millis() - lastPacketMillis) / 1000;
+        display->setTextAlignment(TEXT_ALIGN_RIGHT);
+        if (elapsed < 60) {
+          sprintf(buffer, "RX: %lus ago", elapsed);
+        } else if (elapsed < 3600) {
+          sprintf(buffer, "RX: %lum ago", elapsed / 60);
+        } else {
+          sprintf(buffer, "RX: %luh ago", elapsed / 3600);
+        }
+        display->drawString(248, 100, buffer);
       }
     }
     
-    // === RIGHT COLUMN (130-248) ===
-    
-    // Signal quality
-    sprintf(buffer, "RSSI:%ddBm", rssi);
-    display->drawString(130, 22, buffer);
-    
-    sprintf(buffer, "SNR:%.1fdB", snr);
-    display->drawString(130, 34, buffer);
-    
-    // Packet stats
-    sprintf(buffer, "Size:%dB", length);
-    display->drawString(130, 46, buffer);
-    
-    sprintf(buffer, "Total:%lu", count);
-    display->drawString(130, 58, buffer);
-    
-    // Alert status
-    if (lastPacket.fallState == 3) {
-      // DANGEROUS - Unconscious/Immobile
-      display->setFont(ArialMT_Plain_16);
-      display->drawString(130, 68, "UNCONSCIOUS!");
-      display->setFont(ArialMT_Plain_10);
-    } else if (lastPacket.fallDetected) {
-      display->setFont(ArialMT_Plain_16);
-      display->drawString(130, 72, "**FALL**");
-      display->setFont(ArialMT_Plain_10);
-    } else if (lastPacket.noiseAlert) {
-      display->drawString(130, 70, "LOUD!");
-    } else if (lastPacket.hrAlert || lastPacket.tempAlert) {
-      display->drawString(130, 70, "Alert!");
-    } else {
-      display->drawString(130, 70, "Normal");
-    }
-    
-    // === Bottom status bar ===
-    display->drawHorizontalLine(0, 96, 250);
-    
-    if (lastPacket.fallState == 3) {
-      // Critical: Unconscious warning
-      display->setFont(ArialMT_Plain_16);
-      display->setTextAlignment(TEXT_ALIGN_CENTER);
-      display->drawString(125, 100, "!! UNCONSCIOUS !!");
-    } else if (lastPacket.fallDetected && lastPacket.type == 3) {
-      display->setFont(ArialMT_Plain_16);
-      display->setTextAlignment(TEXT_ALIGN_CENTER);
-      display->drawString(125, 100, ">> FALL EVENT <<");
-    } else {
-      sprintf(buffer, "Listening: 923MHz SF9 | Last: %lus ago", 
-              (millis() - (count > 0 ? 0 : millis())) / 1000);
-      display->drawString(2, 100, buffer);
-    }
-    
-  } else {
-    // === No packets yet ===
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(ArialMT_Plain_16);
-    display->drawString(125, 50, "Waiting...");
-    display->setFont(ArialMT_Plain_10);
-    display->drawString(125, 70, "923MHz SF9 BW125");
+    // Use partial refresh for faster updates
+    display->update(BLACK_BUFFER);
+    ((HT_E0213A367*)display)->displayPartial();
   }
-  
-  display->update();
-  display->display();
 }
 
 // ============================================================================
@@ -503,7 +640,7 @@ void setup() {
       display->drawString(10, 50, "LoRa Init Failed!");
       sprintf(buffer, "Error code: %d", state);
       display->drawString(10, 65, buffer);
-      display->update();
+      display->update(BLACK_BUFFER);
       display->display();
     }
     
@@ -548,10 +685,24 @@ void loop() {
       int rssi = radio.getRSSI();
       float snr = radio.getSNR();
       
-      packetsReceived++;
-      
       // Parse packet information
       parsePacketInfo(rxBuffer, len);
+      
+      // Update counters only when frame counter changes (new packet)
+      if (lastPacket.frameCounter != lastFrameCounter) {
+        packetsReceived++;
+        lastPacketMillis = millis();
+        lastFrameCounter = lastPacket.frameCounter;
+      }
+      
+      // Check if layout needs full refresh (packet type changed, or critical alert)
+      static uint8_t lastPacketType = 0;
+      if (lastPacket.type != lastPacketType || 
+          lastPacket.fallState == 3 || 
+          (lastPacket.fallDetected && lastPacket.type == 3)) {
+        needsFullRefresh = true;
+        lastPacketType = lastPacket.type;
+      }
       
       // Print to Serial
       Serial.printf("\n📦 Packet #%lu\n", packetsReceived);
