@@ -48,7 +48,7 @@ stats = {
 }
 
 def send_time_sync():
-    """Send current time to Vision Master E213 for display"""
+    """Send current time to Vision Master E213 (sent with every packet)"""
     global ser, stats
     
     if not ser or not ser.is_open:
@@ -203,22 +203,14 @@ def read_lora_packets():
     print("="*60 + "\n")
     
     buffer = bytearray()
-    last_time_sync = time.time()
-    
-    # Send initial time sync
-    send_time_sync()
     
     while running:
         try:
-            # Check for time sync request (0xFE from Vision Master)
+            # Check for incoming data
             if ser.in_waiting > 0:
                 first_byte = ser.read(1)
                 
-                if first_byte == b'\xFE':
-                    # Time sync request received
-                    send_time_sync()
-                    continue
-                elif first_byte == b'\xAA':
+                if first_byte == b'\xAA':
                     # Start of LoRa packet frame
                     # Format: [0xAA][LEN][RSSI][SNR][DATA...][0x55]
                     if ser.in_waiting >= 3:
@@ -253,16 +245,14 @@ def read_lora_packets():
                                 
                                 # Send to server
                                 send_to_server(packet_info)
+                                
+                                # Send time sync after each packet
+                                send_time_sync()
                         else:
                             print(f"⚠️  Invalid packet frame (len={len(packet_data)}, end={end_marker.hex()})")
                 else:
                     # Unknown byte, discard
                     pass
-            
-            # Periodic time sync (every 60 seconds)
-            if time.time() - last_time_sync > 60:
-                send_time_sync()
-                last_time_sync = time.time()
             
             time.sleep(0.01)
             
