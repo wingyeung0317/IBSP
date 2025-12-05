@@ -688,6 +688,13 @@ void loop() {
       // Parse packet information
       parsePacketInfo(rxBuffer, len);
       
+      // Ignore unknown packet types
+      if (lastPacket.type == 0 || lastPacket.type > 3) {
+        Serial.printf("\n⚠️ Unknown packet type: %d - Ignored\n", lastPacket.type);
+        radio.startReceive();
+        return;
+      }
+      
       // Update counters only when frame counter changes (new packet)
       if (lastPacket.frameCounter != lastFrameCounter) {
         packetsReceived++;
