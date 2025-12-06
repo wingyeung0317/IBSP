@@ -875,8 +875,14 @@ function App() {
                                   wordBreak: 'break-all'
                                 }}
                               >
-                                {log.raw_data ? Buffer.from(log.raw_data).toString('hex').substring(0, 60) : 'N/A'}
-                                {log.raw_data && Buffer.from(log.raw_data).toString('hex').length > 60 ? '...' : ''}
+                                {log.raw_data ? (() => {
+                                  // Convert Buffer/byte array to hex string in browser
+                                  const bytes = log.raw_data.data || log.raw_data;
+                                  const hexString = Array.from(bytes)
+                                    .map(b => b.toString(16).padStart(2, '0'))
+                                    .join('');
+                                  return hexString.substring(0, 60) + (hexString.length > 60 ? '...' : '');
+                                })() : 'N/A'}
                               </Typography>
                             </TableCell>
                           </TableRow>
