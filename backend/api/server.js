@@ -12,6 +12,10 @@ const PORT = process.env.PORT || 3000;
 // Format: { 'device_id': timestamp }
 const deviceTrackingStartTime = {};
 
+// Track last processed frame_counter per device to prevent duplicate processing
+// Format: { 'device_id_packetType': frame_counter }
+const lastFrameCounters = new Map();
+
 // Alert thresholds
 const ALERT_THRESHOLDS = {
   heartRate: {
@@ -178,6 +182,19 @@ app.post('/api/sensor-data', async (req, res) => {
   
   console.log(`📡 Received packet from ${device_id}: Type ${packet_type}, Frame ${frame_counter}`);
   
+  // Check for duplicate packet (same frame_counter)
+  const frameKey = `${device_id}_${packet_type}`;
+  const lastFrame = lastFrameCounters.get(frameKey);
+  
+  if (lastFrame !== undefined && lastFrame === frame_counter) {
+    console.log(`  ⏭️  DUPLICATE packet skipped (Frame ${frame_counter} already processed)`);
+    return res.json({ 
+      status: 'duplicate', 
+      message: 'Packet already processed',
+      frame_counter 
+    });
+  }
+  
   try {
     // Parse the base64 encoded data
     const parsedData = parsePacket(data, packet_type);
@@ -193,6 +210,9 @@ app.post('/api/sensor-data', async (req, res) => {
        ON CONFLICT (device_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP`,
       [device_id]
     );
+    
+    // Update last processed frame_counter
+    lastFrameCounters.set(frameKey, frame_counter);
     
     // Log raw packet
     await pool.query(
@@ -620,6 +640,54 @@ app.get('/api/devices', async (req, res) => {
   }
 });
 
+// Get packet logs
+app.get('/api/logs/:device_id?', async (req, res) => {
+  const { device_id } = req.params;
+  const { limit = 100, packet_type, offset = 0 } = req.query;
+  
+  try {
+    let query = 'SELECT * FROM packet_log';
+    let params = [];
+    let whereClauses = [];
+    
+    if (device_id) {
+      whereClauses.push('device_id = $' + (params.length + 1));
+      params.push(device_id);
+    }
+    
+    if (packet_type) {
+      whereClauses.push('packet_type = $' + (params.length + 1));
+      params.push(parseInt(packet_type));
+    }
+    
+    if (whereClauses.length > 0) {
+      query += ' WHERE ' + whereClauses.join(' AND ');
+    }
+    
+    query += ' ORDER BY timestamp DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const result = await pool.query(query, params);
+    
+    // Get total count
+    let countQuery = 'SELECT COUNT(*) as total FROM packet_log';
+    if (whereClauses.length > 0) {
+      countQuery += ' WHERE ' + whereClauses.join(' AND ');
+    }
+    const countResult = await pool.query(countQuery, params.slice(0, -2));
+    
+    res.json({
+      logs: result.rows,
+      total: parseInt(countResult.rows[0].total),
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+  } catch (error) {
+    console.error('Error fetching packet logs:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get notification service status
 app.get('/api/notifications/status', (req, res) => {
   try {
@@ -690,6 +758,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   GET    /api/ecg/:device_id - Get ECG data`);
   console.log(`   GET    /api/falls/:device_id - Get fall events`);
   console.log(`   GET    /api/devices - List all devices`);
+  console.log(`   GET    /api/logs/:device_id - Get packet logs`);
   console.log(`   POST   /api/tracking/reset/:device_id - Reset tracking start time`);
   console.log(`   GET    /api/tracking/:device_id - Get tracking info`);
   console.log(`   DELETE /api/tracking/reset/:device_id - Clear tracking filter`);
