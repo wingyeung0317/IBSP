@@ -2366,11 +2366,15 @@ unsigned long lastECGSampleTime = 0;
 unsigned long lastTempSampleTime = 0;
 const int TEMP_SAMPLE_INTERVAL = 5000;  // Read temperature every 5 seconds
 
-// WiFi transmission timing
+// LoRa transmission timing - Optimized for Hong Kong regulations (1% duty cycle)
+// Air time calculations (SF9, BW125kHz):
+//   Realtime (23B): ~353ms → Min interval 35.3s (1% duty cycle)
+//   ECG (65B): ~1119ms → Min interval 111.9s (1% duty cycle)
+// Using 10% safety margin for compliance
 unsigned long lastRealtimeTxTime = 0;
 unsigned long lastECGTxTime = 0;  // Track ECG transmission time globally
-const unsigned long REALTIME_TX_INTERVAL = 60000;   // Send realtime data every 60s (1 minute)
-const unsigned long ECG_TX_INTERVAL = 306000;       // Send ECG data every 306s (5.1 minutes)
+const unsigned long REALTIME_TX_INTERVAL = 38860;   // Send realtime data every 38.9s (optimized)
+const unsigned long ECG_TX_INTERVAL = 123115;       // Send ECG data every 123.1s (2.05 minutes, optimized)
 bool fallEventTriggered = false;
 
 // State change tracking for immediate notifications
@@ -2579,18 +2583,18 @@ void setup() {
   Serial.println("  ALL SYSTEMS READY");
   Serial.println("========================================");
   
-  Serial.println("\n📡 TRANSMISSION SCHEDULE:");
+  Serial.println("\n📡 TRANSMISSION SCHEDULE (Optimized for HK Regulations):");
   Serial.println("  ┌─────────────────────────────────────────┐");
   Serial.print("  │ Realtime Data:     Every ");
   Serial.print(REALTIME_TX_INTERVAL / 1000);
-  Serial.println("s (1min)     │");
+  Serial.println("s (~39s)   │");
   Serial.print("  │ ECG Data:          Every ");
   Serial.print(ECG_TX_INTERVAL / 1000);
-  Serial.println("s (5.1min) │");
+  Serial.println("s (~2min)  │");
   Serial.println("  │ Fall Events:       Immediate            │");
   Serial.println("  │                                         │");
-  Serial.println("  │ Note: Transmission times are staggered  │");
-  Serial.println("  │       to avoid network congestion       │");
+  Serial.println("  │ Note: 1% duty cycle compliance          │");
+  Serial.println("  │       SF9, BW125kHz air time optimized  │");
   Serial.println("  └─────────────────────────────────────────┘");
   Serial.println();
   
@@ -3226,13 +3230,13 @@ void loop() {
       Serial.println("╚══════════════════════════════════════════════════════════╝\n");
     }
     
-    // Send ECG data periodically (Packet Type 0x02) - every 5.1 minutes when heart rate stable
+    // Send ECG data periodically (Packet Type 0x02) - every 2 minutes when heart rate stable
     if (currentTime - lastECGTxTime >= ECG_TX_INTERVAL) {
       int bpm = ecgMonitor.getBPM();
       if (bpm > 40 && bpm < 150) {  // Only send when heart rate in reasonable range
         Serial.println("\n╔══════════════════════════════════════════════════════════╗");
         Serial.println("║         📡 ECG DATA TRANSMISSION (Type 0x02)           ║");
-        Serial.println("║                 Every 5.1 minutes                       ║");
+        Serial.println("║          Every 2.05 minutes (Optimized)                ║");
         Serial.println("╚══════════════════════════════════════════════════════════╝");
         
         uint8_t payload[70];

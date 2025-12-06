@@ -47,7 +47,10 @@ ScreenDisplay *display = nullptr;
 
 // State
 uint32_t packetsReceived = 0;
+uint32_t packetsSkipped = 0;  // Count of skipped unknown packets
 uint8_t rxBuffer[256];
+uint8_t lastRxBuffer[256];  // Buffer to store last received packet for duplicate detection
+int lastRxLength = 0;        // Length of last received packet
 bool displayAvailable = false;
 int displayWidth = 250;
 int displayHeight = 122;
@@ -213,7 +216,7 @@ void checkUartTimeSync() {
 void VextON() {
   pinMode(Vext, OUTPUT);
   digitalWrite(Vext, HIGH);  // Active HIGH
-  delay(1500);
+  delay(100);
 }
 
 void VextOFF() {
@@ -295,7 +298,7 @@ void initDisplay() {
     
     display->update(BLACK_BUFFER);
     display->display();
-    delay(100);
+    delay(300);
     
     needsFullRefresh = true;  // Next update will do full refresh
     
@@ -357,8 +360,13 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
       sprintf(buffer, "Dev:%.8s", lastPacket.deviceId);
       display->drawString(2, 34, buffer);
       
-      // Frame number
-      sprintf(buffer, "Frame:#%d", lastPacket.frameCounter);
+      // Frame number with skipped packets indicator
+      // Show (+x) if packets were skipped before this valid packet
+      if (packetsSkipped > 0) {
+        sprintf(buffer, "Frame:#%d(+%lu)", lastPacket.frameCounter, packetsSkipped);
+      } else {
+        sprintf(buffer, "Frame:#%d", lastPacket.frameCounter);
+      }
       display->drawString(2, 46, buffer);
       
       // Health data
@@ -440,11 +448,11 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
           unsigned long elapsed = (millis() - lastPacketMillis) / 1000;
           display->setTextAlignment(TEXT_ALIGN_RIGHT);
           if (elapsed < 60) {
-            sprintf(buffer, "RX: %lus ago", elapsed);
+            sprintf(buffer, "RX:(%02lu)s ago", elapsed);
           } else if (elapsed < 3600) {
-            sprintf(buffer, "RX: %lum ago", elapsed / 60);
+            sprintf(buffer, "RX:(%02lu)m ago", elapsed / 60);
           } else {
-            sprintf(buffer, "RX: %luh ago", elapsed / 3600);
+            sprintf(buffer, "RX:(%02lu)h ago", elapsed / 3600);
           }
           display->drawString(248, 100, buffer);
         }
@@ -461,7 +469,9 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
     
     display->update(BLACK_BUFFER);
     display->display();  // Full refresh
-    delay(3000);
+
+    // Reset skipped counter after showing in full refresh
+    packetsSkipped = 0;
 
     if(lastPacket.fallDetected){
       needsFullRefresh = true;
@@ -498,7 +508,12 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
       display->fillRect(2, 46, 120, 48);  // Frame, HR, Temp, Noise area
       display->setColor(WHITE);
       
-      sprintf(buffer, "Frame:#%d", lastPacket.frameCounter);
+      // Show (-x) when waiting for new valid packet with x skipped packets
+      if (packetsSkipped > 0) {
+        sprintf(buffer, "Frame:#%d(-%lu)", lastPacket.frameCounter, packetsSkipped);
+      } else {
+        sprintf(buffer, "Frame:#%d", lastPacket.frameCounter);
+      }
       display->drawString(2, 46, buffer);
       
       if (lastPacket.type == 1 || lastPacket.type == 3) {
@@ -559,11 +574,11 @@ void updateDisplay(int rssi, float snr, int length, uint32_t count) {
         unsigned long elapsed = (millis() - lastPacketMillis) / 1000;
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
         if (elapsed < 60) {
-          sprintf(buffer, "RX: %lus ago", elapsed);
+          sprintf(buffer, "RX:(%02lu)s ago", elapsed);
         } else if (elapsed < 3600) {
-          sprintf(buffer, "RX: %lum ago", elapsed / 60);
+          sprintf(buffer, "RX:(%02lu)m ago", elapsed / 60);
         } else {
-          sprintf(buffer, "RX: %luh ago", elapsed / 3600);
+          sprintf(buffer, "RX:(%lu)h ago", elapsed / 3600);
         }
         display->drawString(248, 100, buffer);
       }
@@ -685,21 +700,95 @@ void loop() {
       int rssi = radio.getRSSI();
       float snr = radio.getSNR();
       
-      // Parse packet information
-      parsePacketInfo(rxBuffer, len);
-      
-      // Ignore unknown packet types
-      if (lastPacket.type == 0 || lastPacket.type > 3) {
-        Serial.printf("\n⚠️ Unknown packet type: %d - Ignored\n", lastPacket.type);
+      // Check packet type before parsing to preserve last valid packet
+      if (len >= 13) {
+        uint8_t packetType = rxBuffer[12];  // Port/packet type at byte 12
+        
+        // Ignore unknown packet types - keep last valid packet
+        if (packetType == 0 || packetType > 3) {
+          // Check if this is a duplicate of the last bad packet
+          bool isDuplicate = false;
+          if (lastRxLength == len && len > 0) {
+            isDuplicate = true;
+            for (int i = 0; i < len; i++) {
+              if (rxBuffer[i] != lastRxBuffer[i]) {
+                isDuplicate = false;
+                break;
+              }
+            }
+          }
+          
+          // Only count and update display for new (non-duplicate) bad packets
+          if (!isDuplicate) {
+            packetsSkipped++;
+            Serial.printf("\n⚠️ Unknown packet type: %d - Skipped #%lu (keeping last valid packet)\n", packetType, packetsSkipped);
+            
+            // Store this bad packet for duplicate detection
+            memcpy(lastRxBuffer, rxBuffer, len);
+            lastRxLength = len;
+            
+            // Update display to show skipped count
+            if (displayAvailable && packetsReceived > 0) {
+              updateDisplay(rssi, snr, len, packetsReceived);
+            }
+          } else {
+            Serial.printf("\n🔁 Duplicate bad packet (type: %d) - Ignored\n", packetType);
+          }
+          
+          radio.startReceive();
+          return;
+        }
+      } else {
+        // Packet too short, skip it
+        // Check if this is a duplicate
+        bool isDuplicate = false;
+        if (lastRxLength == len && len > 0) {
+          isDuplicate = true;
+          for (int i = 0; i < len; i++) {
+            if (rxBuffer[i] != lastRxBuffer[i]) {
+              isDuplicate = false;
+              break;
+            }
+          }
+        }
+        
+        if (!isDuplicate) {
+          packetsSkipped++;
+          Serial.printf("\n⚠️ Packet too short (%d bytes) - Skipped #%lu\n", len, packetsSkipped);
+          
+          // Store this bad packet
+          memcpy(lastRxBuffer, rxBuffer, len);
+          lastRxLength = len;
+          
+          // Update display to show skipped count
+          if (displayAvailable && packetsReceived > 0) {
+            updateDisplay(radio.getRSSI(), radio.getSNR(), len, packetsReceived);
+          }
+        } else {
+          Serial.printf("\n🔁 Duplicate short packet (%d bytes) - Ignored\n", len);
+        }
+        
         radio.startReceive();
         return;
       }
       
+      // Parse packet information (only if type is valid)
+      parsePacketInfo(rxBuffer, len);
+      
       // Update counters only when frame counter changes (new packet)
       if (lastPacket.frameCounter != lastFrameCounter) {
         packetsReceived++;
+        needsFullRefresh = true;
         lastPacketMillis = millis();
         lastFrameCounter = lastPacket.frameCounter;
+        
+        // Trigger full refresh if packets were skipped to show (+x)
+        if (packetsSkipped > 0) {
+          Serial.printf("   ℹ️ Skipped %lu unknown packet(s) before this valid packet\n", packetsSkipped);
+          needsFullRefresh = true;  // Force full refresh to show (+x)
+        }
+        
+        // Note: packetsSkipped will be reset to 0 after display update in full refresh
       }
       
       // Check if layout needs full refresh (packet type changed, or critical alert)
@@ -765,6 +854,4 @@ void loop() {
     }
     Serial.println();
   }
-  
-  delay(10);
 }
