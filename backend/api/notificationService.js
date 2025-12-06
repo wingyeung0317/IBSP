@@ -236,15 +236,13 @@ function formatHeartRateAlert(deviceId, heartRate, threshold) {
     `⏰ 時間：${timestamp}\n` +
     `📱 裝置：\`${deviceId}\`\n` +
     `💓 心率：${heartRate} bpm (*${status}*)\n` +
-    `📊 正常範圍：${threshold.min}-${threshold.max} bpm\n\n` +
-    `⚠️ *請注意員工健康狀況！*`;
+    `📊 正常範圍：${threshold.min}-${threshold.max} bpm\n\n`;
 
   const whatsappMessage = `💓 心率異常警報\n\n` +
     `時間：${timestamp}\n` +
     `裝置：${deviceId}\n` +
     `心率：${heartRate} bpm (${status})\n` +
-    `正常範圍：${threshold.min}-${threshold.max} bpm\n\n` +
-    `⚠️ 請注意員工健康狀況！`;
+    `正常範圍：${threshold.min}-${threshold.max} bpm\n\n`;
 
   const discordTitle = '💓 心率異常警報';
   const discordDescription = `裝置 **${deviceId}** 偵測到心率異常`;
@@ -273,15 +271,13 @@ function formatTemperatureAlert(deviceId, temperature, threshold) {
     `⏰ 時間：${timestamp}\n` +
     `📱 裝置：\`${deviceId}\`\n` +
     `🌡️ 體溫：${temperature.toFixed(1)}°C (*${status}*)\n` +
-    `📊 正常範圍：${threshold.min}-${threshold.max}°C\n\n` +
-    `⚠️ *請注意員工健康狀況！*`;
+    `📊 正常範圍：${threshold.min}-${threshold.max}°C\n\n`;
 
   const whatsappMessage = `🌡️ 體溫異常警報\n\n` +
     `時間：${timestamp}\n` +
     `裝置：${deviceId}\n` +
     `體溫：${temperature.toFixed(1)}°C (${status})\n` +
-    `正常範圍：${threshold.min}-${threshold.max}°C\n\n` +
-    `⚠️ 請注意員工健康狀況！`;
+    `正常範圍：${threshold.min}-${threshold.max}°C\n\n`;
 
   const discordTitle = '🌡️ 體溫異常警報';
   const discordDescription = `裝置 **${deviceId}** 偵測到體溫異常`;
@@ -336,6 +332,51 @@ function formatNoiseAlert(deviceId, noiseLevel, threshold) {
 }
 
 /**
+ * Format unconscious/immobility alert
+ */
+function formatUnconsciousAlert(deviceId, fallData) {
+  const timestamp = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+  
+  // Telegram format (Markdown)
+  const telegramMessage = `🆘 *昏迷警報 - 緊急！*\n\n` +
+    `⏰ 時間：${timestamp}\n` +
+    `📱 裝置：\`${deviceId}\`\n` +
+    `⚠️ 狀態：*偵測到跌倒後無移動*\n` +
+    `📐 傾斜角度：${fallData.pitch_angle != null ? fallData.pitch_angle.toFixed(1) : 'N/A'}°\n` +
+    `💓 心率：${fallData.heart_rate != null ? fallData.heart_rate : 'N/A'} bpm\n` +
+    `🌡️ 體溫：${fallData.body_temperature != null ? fallData.body_temperature.toFixed(1) : 'N/A'}°C\n\n` +
+    `🚨 *偵測到跌倒後無移動，可能失去意識！*`;
+
+  // Plain text format (WhatsApp)
+  const whatsappMessage = `🆘 昏迷警報 - 緊急！\n\n` +
+    `時間：${timestamp}\n` +
+    `裝置：${deviceId}\n` +
+    `⚠️ 狀態：偵測到跌倒後無移動\n` +
+    `傾斜角度：${fallData.pitch_angle != null ? fallData.pitch_angle.toFixed(1) : 'N/A'}°\n` +
+    `心率：${fallData.heart_rate != null ? fallData.heart_rate : 'N/A'} bpm\n` +
+    `體溫：${fallData.body_temperature != null ? fallData.body_temperature.toFixed(1) : 'N/A'}°C\n\n` +
+    `🚨 偵測到跌倒後無移動，可能失去意識！`;
+
+  // Discord embed format
+  const discordTitle = '🆘 昏迷警報 - 緊急';
+  const discordDescription = `裝置 **${deviceId}** 偵測到跌倒後無移動，可能失去意識！`;
+  const discordFields = [
+    { name: '⏰ 時間', value: timestamp, inline: true },
+    { name: '📱 裝置', value: deviceId, inline: true },
+    { name: '⚠️ 狀態', value: '跌倒後無移動', inline: true },
+    { name: '📐 傾斜角度', value: `${fallData.pitch_angle != null ? fallData.pitch_angle.toFixed(1) : 'N/A'}°`, inline: true },
+    { name: '💓 心率', value: `${fallData.heart_rate != null ? fallData.heart_rate : 'N/A'} bpm`, inline: true },
+    { name: '🌡️ 體溫', value: `${fallData.body_temperature != null ? fallData.body_temperature.toFixed(1) : 'N/A'}°C`, inline: true }
+  ];
+
+  return {
+    telegram: telegramMessage,
+    whatsapp: whatsappMessage,
+    discord: { title: discordTitle, description: discordDescription, fields: discordFields, color: 0x8B0000 }
+  };
+}
+
+/**
  * Send alert notification to all configured channels
  */
 async function sendAlert(alertType, deviceId, data) {
@@ -346,6 +387,9 @@ async function sendAlert(alertType, deviceId, data) {
   switch (alertType) {
     case 'fall':
       messages = formatFallAlert(deviceId, data);
+      break;
+    case 'unconscious':
+      messages = formatUnconsciousAlert(deviceId, data);
       break;
     case 'heart_rate':
       messages = formatHeartRateAlert(deviceId, data.heartRate, data.threshold);
