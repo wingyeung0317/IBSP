@@ -226,9 +226,33 @@ app.post('/api/sensor-data', async (req, res) => {
         ]
       );
       
-      console.log(`  ✅ Stored real-time data: HR=${parsedData.heart_rate}, Temp=${parsedData.body_temperature.toFixed(1)}°C`);
+      console.log(`  ✅ Stored real-time data: HR=${parsedData.heart_rate}, Temp=${parsedData.body_temperature.toFixed(1)}°C, Fall State=${parsedData.fall_state}`);
       
       // Check for alerts and send notifications
+      // Unconscious alert (fall_state == 3 DANGEROUS - highest priority)
+      if (parsedData.fall_state === 3 && !isAlertInCooldown(device_id, 'unconscious')) {
+        console.log(`  🚨 UNCONSCIOUS DETECTED for ${device_id}!`);
+        notificationService.sendAlert('unconscious', device_id, {
+          heart_rate: parsedData.heart_rate,
+          body_temperature: parsedData.body_temperature,
+          fall_state: parsedData.fall_state,
+          pitch_angle: null,  // Not available in realtime packet
+          roll_angle: null
+        }).catch(err => console.error('Failed to send unconscious alert:', err));
+      }
+      
+      // Fall alert (fall_state == 2 or fall flag)
+      if ((parsedData.fall_state === 2 || (alertFlags & 0x04) !== 0) && !isAlertInCooldown(device_id, 'fall')) {
+        console.log(`  🚨 FALL DETECTED for ${device_id}!`);
+        notificationService.sendAlert('fall', device_id, {
+          heart_rate: parsedData.heart_rate,
+          body_temperature: parsedData.body_temperature,
+          fall_state: parsedData.fall_state,
+          pitch_angle: null,  // Not available in realtime packet
+          roll_angle: null
+        }).catch(err => console.error('Failed to send fall alert:', err));
+      }
+      
       // Heart rate alert
       if ((alertFlags & 0x01) !== 0 && !isAlertInCooldown(device_id, 'heart_rate')) {
         notificationService.sendAlert('heart_rate', device_id, {
@@ -243,15 +267,6 @@ app.post('/api/sensor-data', async (req, res) => {
           temperature: parsedData.body_temperature,
           threshold: ALERT_THRESHOLDS.temperature
         }).catch(err => console.error('Failed to send temperature alert:', err));
-      }
-      
-      // Fall alert
-      if ((alertFlags & 0x04) !== 0 && !isAlertInCooldown(device_id, 'fall')) {
-        notificationService.sendAlert('fall', device_id, {
-          heart_rate: parsedData.heart_rate,
-          body_temperature: parsedData.body_temperature,
-          fall_state: parsedData.fall_state
-        }).catch(err => console.error('Failed to send fall alert:', err));
       }
       
       // Noise alert
