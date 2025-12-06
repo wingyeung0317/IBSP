@@ -3,6 +3,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const { Pool } = require('pg');
+const notificationService = require('./notificationService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,6 +11,46 @@ const PORT = process.env.PORT || 3000;
 // Store tracking start time for each device (in-memory)
 // Format: { 'device_id': timestamp }
 const deviceTrackingStartTime = {};
+
+// Alert thresholds
+const ALERT_THRESHOLDS = {
+  heartRate: {
+    min: parseInt(process.env.HEART_RATE_MIN) || 50,
+    max: parseInt(process.env.HEART_RATE_MAX) || 120
+  },
+  temperature: {
+    min: parseFloat(process.env.BODY_TEMP_MIN) || 36.0,
+    max: parseFloat(process.env.BODY_TEMP_MAX) || 38.0
+  },
+  noiseLevel: parseInt(process.env.NOISE_THRESHOLD) || 200
+};
+
+// Track sent alerts to prevent duplicates
+const sentAlerts = new Map(); // key: `${device_id}_${alert_type}_${timestamp_minute}`
+const ALERT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes cooldown
+
+/**
+ * Check if alert was recently sent
+ */
+function isAlertInCooldown(deviceId, alertType) {
+  const minute = Math.floor(Date.now() / 60000); // Current minute
+  const key = `${deviceId}_${alertType}_${minute}`;
+  
+  // Clean up old entries
+  const cutoff = Date.now() - ALERT_COOLDOWN_MS;
+  for (const [k, timestamp] of sentAlerts.entries()) {
+    if (timestamp < cutoff) {
+      sentAlerts.delete(k);
+    }
+  }
+  
+  if (sentAlerts.has(key)) {
+    return true;
+  }
+  
+  sentAlerts.set(key, Date.now());
+  return false;
+}
 
 // PostgreSQL connection pool
 const pool = new Pool({
@@ -187,6 +228,40 @@ app.post('/api/sensor-data', async (req, res) => {
       
       console.log(`  ✅ Stored real-time data: HR=${parsedData.heart_rate}, Temp=${parsedData.body_temperature.toFixed(1)}°C`);
       
+      // Check for alerts and send notifications
+      // Heart rate alert
+      if ((alertFlags & 0x01) !== 0 && !isAlertInCooldown(device_id, 'heart_rate')) {
+        notificationService.sendAlert('heart_rate', device_id, {
+          heartRate: parsedData.heart_rate,
+          threshold: ALERT_THRESHOLDS.heartRate
+        }).catch(err => console.error('Failed to send heart rate alert:', err));
+      }
+      
+      // Temperature alert
+      if ((alertFlags & 0x02) !== 0 && !isAlertInCooldown(device_id, 'temperature')) {
+        notificationService.sendAlert('temperature', device_id, {
+          temperature: parsedData.body_temperature,
+          threshold: ALERT_THRESHOLDS.temperature
+        }).catch(err => console.error('Failed to send temperature alert:', err));
+      }
+      
+      // Fall alert
+      if ((alertFlags & 0x04) !== 0 && !isAlertInCooldown(device_id, 'fall')) {
+        notificationService.sendAlert('fall', device_id, {
+          heart_rate: parsedData.heart_rate,
+          body_temperature: parsedData.body_temperature,
+          fall_state: parsedData.fall_state
+        }).catch(err => console.error('Failed to send fall alert:', err));
+      }
+      
+      // Noise alert
+      if ((alertFlags & 0x08) !== 0 && !isAlertInCooldown(device_id, 'noise')) {
+        notificationService.sendAlert('noise', device_id, {
+          noiseLevel: parsedData.noise_level,
+          threshold: ALERT_THRESHOLDS.noiseLevel
+        }).catch(err => console.error('Failed to send noise alert:', err));
+      }
+      
     } else if (packet_type === 2) {
       // ECG data
       await pool.query(
@@ -212,11 +287,12 @@ app.post('/api/sensor-data', async (req, res) => {
       
     } else if (packet_type === 3) {
       // Fall event
-      await pool.query(
+      const fallResult = await pool.query(
         `INSERT INTO fall_events 
          (device_id, event_timestamp, jerk_magnitude, svm_value, angular_velocity, pitch_angle, roll_angle,
           impact_count, warning_count, heart_rate, body_temperature, accel_x, accel_y, accel_z, movement_variance)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         RETURNING *`,
         [
           device_id,
           parsedData.timestamp,
@@ -237,6 +313,21 @@ app.post('/api/sensor-data', async (req, res) => {
       );
       
       console.log(`  🚨 FALL EVENT: Jerk=${parsedData.jerk_magnitude.toFixed(0)}, SVM=${parsedData.svm_value.toFixed(2)}g`);
+      
+      // Send fall alert notification (always send for fall events, no cooldown check needed as they're rare)
+      const fallEventData = fallResult.rows[0];
+      notificationService.sendAlert('fall', device_id, {
+        jerk_magnitude: fallEventData.jerk_magnitude,
+        svm_value: fallEventData.svm_value,
+        angular_velocity: fallEventData.angular_velocity,
+        pitch_angle: fallEventData.pitch_angle,
+        roll_angle: fallEventData.roll_angle,
+        heart_rate: fallEventData.heart_rate,
+        body_temperature: fallEventData.body_temperature,
+        accel_x: fallEventData.accel_x,
+        accel_y: fallEventData.accel_y,
+        accel_z: fallEventData.accel_z
+      }).catch(err => console.error('Failed to send fall event alert:', err));
     }
     
     res.json({ status: 'success', message: 'Data stored successfully' });
@@ -514,6 +605,45 @@ app.get('/api/devices', async (req, res) => {
   }
 });
 
+// Get notification service status
+app.get('/api/notifications/status', (req, res) => {
+  try {
+    const status = notificationService.getStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error fetching notification status:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Test notification (for debugging)
+app.post('/api/notifications/test', async (req, res) => {
+  const { channel, deviceId } = req.body;
+  
+  try {
+    let result;
+    const testDeviceId = deviceId || 'TEST-DEVICE';
+    
+    if (channel === 'telegram' || !channel) {
+      result = await notificationService.sendAlert('fall', testDeviceId, {
+        jerk_magnitude: 25.5,
+        pitch_angle: 85.0,
+        heart_rate: 95,
+        body_temperature: 36.8
+      });
+    }
+    
+    res.json({ 
+      status: 'success', 
+      message: 'Test notification sent',
+      result 
+    });
+  } catch (error) {
+    console.error('Error sending test notification:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
@@ -530,6 +660,14 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Health Monitor API Server`);
   console.log(`📡 Listening on port ${PORT}`);
   console.log(`🗄️  Database: ${process.env.DB_HOST || 'postgres'}:${process.env.DB_PORT || 5432}`);
+  
+  // Display notification service status
+  const notifStatus = notificationService.getStatus();
+  console.log(`\n📢 Notification Services:`);
+  console.log(`   Telegram: ${notifStatus.telegram.enabled && notifStatus.telegram.configured ? '✅ Enabled' : '⚠️  Disabled'}`);
+  console.log(`   Discord: ${notifStatus.discord.enabled && notifStatus.discord.configured ? '✅ Enabled' : '⚠️  Disabled'}`);
+  console.log(`   WhatsApp: ${notifStatus.whatsapp.enabled && notifStatus.whatsapp.configured ? '✅ Enabled' : '⚠️  Disabled'}`);
+  
   console.log(`\n📋 Available endpoints:`);
   console.log(`   POST   /api/sensor-data - Receive data from ESP32`);
   console.log(`   GET    /api/vitals/latest - Get latest vitals`);
@@ -540,6 +678,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   POST   /api/tracking/reset/:device_id - Reset tracking start time`);
   console.log(`   GET    /api/tracking/:device_id - Get tracking info`);
   console.log(`   DELETE /api/tracking/reset/:device_id - Clear tracking filter`);
+  console.log(`   GET    /api/notifications/status - Get notification service status`);
+  console.log(`   POST   /api/notifications/test - Send test notification`);
   console.log(`\n✨ Server ready!\n`);
 });
 

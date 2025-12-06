@@ -35,6 +35,25 @@ services:
       DB_PASSWORD: healthpass123
       DB_NAME: health_monitoring
       CORS_ORIGIN: http://192.168.1.137:5001
+      # Alert Thresholds
+      HEART_RATE_MIN: 50
+      HEART_RATE_MAX: 120
+      BODY_TEMP_MIN: 36.0
+      BODY_TEMP_MAX: 38.0
+      NOISE_THRESHOLD: 200
+      # Telegram Configuration
+      TELEGRAM_ENABLED: "true"
+      TELEGRAM_BOT_TOKEN: "8426773013:AAFOjZBe8HsLRiJXMJwUQyoOPHdl_H4lrr8"
+      TELEGRAM_CHAT_IDS: "7410980118"
+      # Discord Configuration
+      DISCORD_ENABLED: "false"
+      DISCORD_WEBHOOK_URLS: ""
+      # WhatsApp Configuration (Twilio)
+      WHATSAPP_ENABLED: "false"
+      TWILIO_ACCOUNT_SID: ""
+      TWILIO_AUTH_TOKEN: ""
+      TWILIO_WHATSAPP_FROM: ""
+      WHATSAPP_TO_NUMBERS: ""
     ports:
       - "5000:3000"
     depends_on:

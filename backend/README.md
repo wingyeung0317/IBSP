@@ -5,9 +5,12 @@ Complete Docker-based health monitoring system for ESP32 IoT devices with fall d
 ## System Architecture
 
 ```
-ESP32 Device (WiFi) → API Server (Node.js) → PostgreSQL Database
-                                           ↓
-                                    React Dashboard
+ESP32 Device (WiFi/LoRa) → API Server (Node.js) → PostgreSQL Database
+                                                ↓
+                                         React Dashboard
+                                                ↓
+                                    Notification Services
+                                    (Telegram/Discord/WhatsApp)
 ```
 
 ## Features
@@ -24,6 +27,14 @@ ESP32 Device (WiFi) → API Server (Node.js) → PostgreSQL Database
 - Fall alert notifications
 - Multi-device support
 - Auto-refresh every 5 seconds
+
+### 🔔 Alert Notifications
+- **Telegram Bot**: Instant messages to personal or group chats
+- **Discord Webhooks**: Rich embedded alerts to Discord channels
+- **WhatsApp**: SMS-style alerts via Twilio API
+- Configurable alert thresholds for all vital signs
+- Automatic cooldown to prevent notification spam
+- Real-time alert status monitoring
 
 ### 🗄️ Database
 - PostgreSQL with optimized schema for sensor data
@@ -53,7 +64,35 @@ const char* WIFI_PASSWORD = "YourPassword";
 const char* SERVER_URL = "http://YOUR_SERVER_IP:5000/api/sensor-data";
 ```
 
-### 3. Start the System
+### 3. Configure Notifications (Optional)
+
+The system supports multiple notification channels for alerts. See **[NOTIFICATION_SETUP.md](NOTIFICATION_SETUP.md)** for detailed instructions.
+
+**Quick setup using PowerShell:**
+```powershell
+.\setup-notifications.ps1
+```
+
+**Or manually edit `docker-compose.yml`:**
+```yaml
+# Enable Telegram notifications
+TELEGRAM_ENABLED: "true"
+TELEGRAM_BOT_TOKEN: "your_bot_token"
+TELEGRAM_CHAT_IDS: "123456789,-987654321"
+
+# Enable Discord notifications
+DISCORD_ENABLED: "true"
+DISCORD_WEBHOOK_URLS: "https://discord.com/api/webhooks/..."
+
+# Enable WhatsApp notifications (via Twilio)
+WHATSAPP_ENABLED: "true"
+TWILIO_ACCOUNT_SID: "ACxxxx..."
+TWILIO_AUTH_TOKEN: "xxxx..."
+TWILIO_WHATSAPP_FROM: "+14155238886"
+WHATSAPP_TO_NUMBERS: "+886912345678"
+```
+
+### 4. Start the System
 
 ```bash
 docker-compose up -d
@@ -105,6 +144,61 @@ Get pending fall alerts.
 
 ### GET /api/devices
 List all registered devices.
+
+### GET /api/notifications/status
+Get notification service configuration status.
+
+**Response:**
+```json
+{
+  "telegram": {
+    "enabled": true,
+    "configured": true,
+    "chatCount": 2
+  },
+  "discord": {
+    "enabled": true,
+    "configured": true,
+    "webhookCount": 1
+  },
+  "whatsapp": {
+    "enabled": false,
+    "configured": false,
+    "recipientCount": 0
+  }
+}
+```
+
+### POST /api/notifications/test
+Send a test notification to all configured channels.
+
+**Request Body:**
+```json
+{
+  "channel": "telegram",
+  "deviceId": "TEST-DEVICE"
+}
+```
+
+## Notification System
+
+The system automatically sends alerts when:
+- 🚨 **Fall detected** - Immediate notification with fall details
+- 💓 **Heart rate abnormal** - Outside configured thresholds (50-120 bpm default)
+- 🌡️ **Body temperature abnormal** - Outside configured range (36-38°C default)
+- 🔊 **High noise level** - Above threshold (200/255 default)
+
+### Alert Cooldown
+- Alerts have a 5-minute cooldown period to prevent spam
+- Fall events are always sent (no cooldown)
+- Multiple channels can be enabled simultaneously
+
+### Supported Platforms
+- **Telegram**: Personal or group chat notifications with Markdown formatting
+- **Discord**: Rich embedded messages with color-coded alerts
+- **WhatsApp**: Text messages via Twilio (requires paid account for production use)
+
+For detailed setup instructions, see **[NOTIFICATION_SETUP.md](NOTIFICATION_SETUP.md)**.
 
 ## Data Packet Formats
 
