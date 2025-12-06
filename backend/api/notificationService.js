@@ -192,21 +192,19 @@ function formatFallAlert(deviceId, fallData) {
   const telegramMessage = `🚨 *跌倒警報*\n\n` +
     `⏰ 時間：${timestamp}\n` +
     `📱 裝置：\`${deviceId}\`\n` +
-    `⚡ 衝擊力：${fallData.jerk_magnitude?.toFixed(2) || 'N/A'} m/s³\n` +
-    `📐 傾斜角度：${fallData.pitch_angle?.toFixed(1) || 'N/A'}°\n` +
-    `💓 心率：${fallData.heart_rate || 'N/A'} bpm\n` +
-    `🌡️ 體溫：${fallData.body_temperature?.toFixed(1) || 'N/A'}°C\n\n` +
-    `⚠️ *請立即檢查員工狀況！*`;
+    `⚡ 衝擊力：${fallData.jerk_magnitude != null ? fallData.jerk_magnitude.toFixed(2) : 'N/A'} m/s³\n` +
+    `📐 傾斜角度：${fallData.pitch_angle != null ? fallData.pitch_angle.toFixed(1) : 'N/A'}°\n` +
+    `💓 心率：${fallData.heart_rate != null ? fallData.heart_rate : 'N/A'} bpm\n` +
+    `🌡️ 體溫：${fallData.body_temperature != null ? fallData.body_temperature.toFixed(1) : 'N/A'}°C\n\n`;
 
   // Plain text format (WhatsApp)
   const whatsappMessage = `🚨 跌倒警報\n\n` +
     `時間：${timestamp}\n` +
     `裝置：${deviceId}\n` +
-    `衝擊力：${fallData.jerk_magnitude?.toFixed(2) || 'N/A'} m/s³\n` +
-    `傾斜角度：${fallData.pitch_angle?.toFixed(1) || 'N/A'}°\n` +
-    `心率：${fallData.heart_rate || 'N/A'} bpm\n` +
-    `體溫：${fallData.body_temperature?.toFixed(1) || 'N/A'}°C\n\n` +
-    `⚠️ 請立即檢查員工狀況！`;
+    `衝擊力：${fallData.jerk_magnitude != null ? fallData.jerk_magnitude.toFixed(2) : 'N/A'} m/s³\n` +
+    `傾斜角度：${fallData.pitch_angle != null ? fallData.pitch_angle.toFixed(1) : 'N/A'}°\n` +
+    `心率：${fallData.heart_rate != null ? fallData.heart_rate : 'N/A'} bpm\n` +
+    `體溫：${fallData.body_temperature != null ? fallData.body_temperature.toFixed(1) : 'N/A'}°C\n\n`;
 
   // Discord embed format
   const discordTitle = '🚨 跌倒警報';
@@ -214,10 +212,10 @@ function formatFallAlert(deviceId, fallData) {
   const discordFields = [
     { name: '⏰ 時間', value: timestamp, inline: true },
     { name: '📱 裝置', value: deviceId, inline: true },
-    { name: '⚡ 衝擊力', value: `${fallData.jerk_magnitude?.toFixed(2) || 'N/A'} m/s³`, inline: true },
-    { name: '📐 傾斜角度', value: `${fallData.pitch_angle?.toFixed(1) || 'N/A'}°`, inline: true },
-    { name: '💓 心率', value: `${fallData.heart_rate || 'N/A'} bpm`, inline: true },
-    { name: '🌡️ 體溫', value: `${fallData.body_temperature?.toFixed(1) || 'N/A'}°C`, inline: true }
+    { name: '⚡ 衝擊力', value: `${fallData.jerk_magnitude != null ? fallData.jerk_magnitude.toFixed(2) : 'N/A'} m/s³`, inline: true },
+    { name: '📐 傾斜角度', value: `${fallData.pitch_angle != null ? fallData.pitch_angle.toFixed(1) : 'N/A'}°`, inline: true },
+    { name: '💓 心率', value: `${fallData.heart_rate != null ? fallData.heart_rate : 'N/A'} bpm`, inline: true },
+    { name: '🌡️ 體溫', value: `${fallData.body_temperature != null ? fallData.body_temperature.toFixed(1) : 'N/A'}°C`, inline: true }
   ];
 
   return {
