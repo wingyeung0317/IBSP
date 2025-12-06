@@ -13,7 +13,7 @@ const deviceTrackingStartTime = {};
 
 // PostgreSQL connection pool
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
+  host: process.env.DB_HOST || 'postgres',
   port: process.env.DB_PORT || 5432,
   user: process.env.DB_USER || 'healthmonitor',
   password: process.env.DB_PASSWORD || 'healthpass123',
@@ -527,9 +527,9 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚀 Health Monitor API Server`);
+  console.log(`🚀 Health Monitor API Server`);
   console.log(`📡 Listening on port ${PORT}`);
-  console.log(`🗄️  Database: ${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}`);
+  console.log(`🗄️  Database: ${process.env.DB_HOST || 'postgres'}:${process.env.DB_PORT || 5432}`);
   console.log(`\n📋 Available endpoints:`);
   console.log(`   POST   /api/sensor-data - Receive data from ESP32`);
   console.log(`   GET    /api/vitals/latest - Get latest vitals`);

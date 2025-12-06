@@ -34,7 +34,7 @@ UART_BAUDRATE = 115200
 UART_TIMEOUT = 1
 
 # Backend server URL (running in Docker on same Raspberry Pi)
-SERVER_URL = 'http://localhost:5000/api/sensor-data'
+SERVER_URL = 'http://192.168.1.137:5000/api/sensor-data'
 
 # Global variables
 ser = None
@@ -207,7 +207,7 @@ def read_lora_packets():
     while running:
         try:
             # Check for incoming data
-            if ser.in_waiting > 0:
+            if ser and ser.is_open and ser.in_waiting > 0:
                 first_byte = ser.read(1)
                 
                 if first_byte == b'\xAA':
@@ -259,11 +259,71 @@ def read_lora_packets():
         except serial.SerialException as e:
             print(f"❌ UART error: {e}")
             stats['errors'] += 1
-            time.sleep(1)
+            print("   🔄 Attempting to reconnect...")
+            running = False  # Stop the loop to prevent further errors
+            try:
+                if ser and ser.is_open:
+                    ser.close()
+                ser = None
+                time.sleep(2)
+                ser = serial.Serial(
+                    port=UART_PORT,
+                    baudrate=UART_BAUDRATE,
+                    timeout=UART_TIMEOUT,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE
+                )
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+                print("   ✅ Reconnected successfully")
+                running = True  # Resume the loop
+            except Exception as reconnect_error:
+                print(f"   ❌ Reconnection failed: {reconnect_error}")
+                time.sleep(5)
+                break  # Exit the loop if reconnection fails
         except KeyboardInterrupt:
             break
+        except OSError as e:
+            if e.errno == 5:  # Input/output error
+                print(f"❌ I/O Error: {e}")
+                print("   This usually means the UART device disconnected or has hardware issues")
+                print("   🔄 Attempting to reconnect...")
+                stats['errors'] += 1
+                running = False  # Stop the loop to prevent further errors
+                try:
+                    if ser and ser.is_open:
+                        ser.close()
+                    ser = None
+                    time.sleep(2)
+                    ser = serial.Serial(
+                        port=UART_PORT,
+                        baudrate=UART_BAUDRATE,
+                        timeout=UART_TIMEOUT,
+                        bytesize=serial.EIGHTBITS,
+                        parity=serial.PARITY_NONE,
+                        stopbits=serial.STOPBITS_ONE
+                    )
+                    ser.reset_input_buffer()
+                    ser.reset_output_buffer()
+                    print("   ✅ Reconnected successfully")
+                    running = True  # Resume the loop
+                except Exception as reconnect_error:
+                    print(f"   ❌ Reconnection failed: {reconnect_error}")
+                    print("   Please check:")
+                    print("   1. UART cable connections")
+                    print("   2. Power to Vision Master E213")
+                    print("   3. UART is enabled: sudo raspi-config")
+                    time.sleep(5)
+                    break  # Exit the loop if reconnection fails
+            else:
+                print(f"❌ OS Error: {e}")
+                stats['errors'] += 1
+                time.sleep(1)
         except Exception as e:
             print(f"❌ Unexpected error: {e}")
+            import traceback
+            traceback.print_exc()
             stats['errors'] += 1
             time.sleep(1)
 

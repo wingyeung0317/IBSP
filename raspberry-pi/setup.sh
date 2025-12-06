@@ -34,7 +34,11 @@ sudo apt-get install -y \
 
 # Install Python packages
 echo "[3/8] Installing Python packages..."
-pip3 install --user pyserial requests
+pip3 install --user pyserial requests --break-system-packages
+
+# Install Python packages for root (required for systemd service)
+echo "Installing Python packages for system (root)..."
+sudo pip3 install pyserial requests --break-system-packages
 
 # Configure UART
 echo "[4/8] Configuring UART..."
@@ -44,6 +48,7 @@ sudo raspi-config nonint set_config_var enable_uart 1 /boot/config.txt
 # Add user to dialout group for UART access
 echo "[5/8] Setting permissions..."
 sudo usermod -a -G dialout $USER
+sudo usermod -a -G tty $USER
 sudo usermod -a -G docker $USER
 
 # Create project directory
@@ -73,7 +78,7 @@ After=network.target docker.service
 
 [Service]
 Type=simple
-User=$USER
+User=root
 WorkingDirectory=$HOME/IBSP/raspberry-pi
 ExecStart=/usr/bin/python3 $HOME/IBSP/raspberry-pi/uart_lora_receiver.py
 Restart=always

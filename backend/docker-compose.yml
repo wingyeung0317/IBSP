@@ -34,7 +34,7 @@ services:
       DB_USER: healthmonitor
       DB_PASSWORD: healthpass123
       DB_NAME: health_monitoring
-      CORS_ORIGIN: http://localhost:5001
+      CORS_ORIGIN: http://192.168.1.137:5001
     ports:
       - "5000:3000"
     depends_on:
@@ -54,7 +54,7 @@ services:
       dockerfile: Dockerfile
     container_name: health-monitor-dashboard
     environment:
-      REACT_APP_API_URL: http://localhost:5000
+      REACT_APP_API_URL: http://192.168.1.137:5000
       PORT: 3001
     ports:
       - "5001:3001"
