@@ -14,6 +14,16 @@ import {
   Button,
   IconButton,
   Snackbar,
+  Tabs,
+  Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TablePagination,
+  Paper,
 } from '@mui/material';
 import {
   Favorite,
@@ -23,6 +33,7 @@ import {
   CheckCircle,
   Refresh,
   RestartAlt,
+  Article,
 } from '@mui/icons-material';
 import {
   LineChart,
@@ -51,6 +62,18 @@ function App() {
   const [error, setError] = useState(null);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [currentTab, setCurrentTab] = useState('dashboard');
+  const [logs, setLogs] = useState([]);
+  const [logsTotal, setLogsTotal] = useState(0);
+  const [logsPage, setLogsPage] = useState(0);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [alarmSound] = useState(() => {
+    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBzGF0fPTgjMGHm7A7+OZURE=');
+    audio.loop = true;
+    return audio;
+  });
+  const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
+  const [emergencyState, setEmergencyState] = useState(null); // 'fall' or 'unconscious'
 
   // Fetch devices
   useEffect(() => {
@@ -86,6 +109,28 @@ function App() {
       const vitalsRes = await axios.get(`${API_URL}/api/vitals/latest`);
       const deviceVitals = vitalsRes.data.find(v => v.device_id === selectedDevice);
       setLatestVitals(deviceVitals);
+
+      // Check for emergency conditions
+      if (deviceVitals) {
+        if (deviceVitals.fall_state === 3) {
+          // Unconscious/Dangerous state - HIGHEST PRIORITY
+          if (emergencyState !== 'unconscious') {
+            setEmergencyState('unconscious');
+            playAlarm();
+          }
+        } else if (deviceVitals.fall_state === 2) {
+          // Fall detected
+          if (emergencyState !== 'fall' && emergencyState !== 'unconscious') {
+            setEmergencyState('fall');
+            playAlarm();
+          }
+        } else if (deviceVitals.fall_state === 0 || deviceVitals.fall_state === 4) {
+          // Normal or Recovery - stop alarm
+          if (emergencyState) {
+            stopAlarm();
+          }
+        }
+      }
 
       // Fetch real-time data history (last 50 readings)
       const realtimeRes = await axios.get(`${API_URL}/api/realtime/${selectedDevice}?limit=50`);
@@ -125,6 +170,34 @@ function App() {
   const getFallStateColor = (state) => {
     const colors = ['success', 'warning', 'error', 'error', 'info'];
     return colors[state] || 'default';
+  };
+
+  const playAlarm = () => {
+    try {
+      if (!isAlarmPlaying) {
+        alarmSound.play().catch(err => console.log('Audio play failed:', err));
+        setIsAlarmPlaying(true);
+      }
+    } catch (err) {
+      console.error('Failed to play alarm:', err);
+    }
+  };
+
+  const stopAlarm = () => {
+    try {
+      alarmSound.pause();
+      alarmSound.currentTime = 0;
+      setIsAlarmPlaying(false);
+      setEmergencyState(null);
+    } catch (err) {
+      console.error('Failed to stop alarm:', err);
+    }
+  };
+
+  const handleDismissEmergency = () => {
+    stopAlarm();
+    setSnackbarMessage('Emergency alert dismissed');
+    setSnackbarOpen(true);
   };
 
   const handleReset = () => {
@@ -181,6 +254,29 @@ function App() {
     setSnackbarOpen(false);
   };
 
+  const fetchLogs = async (page = 0) => {
+    try {
+      setLogsLoading(true);
+      const limit = 50;
+      const offset = page * limit;
+      const response = await axios.get(`${API_URL}/api/logs/${selectedDevice}?limit=${limit}&offset=${offset}`);
+      setLogs(response.data.logs);
+      setLogsTotal(response.data.total);
+      setLogsPage(page);
+      setLogsLoading(false);
+    } catch (err) {
+      console.error('Error fetching logs:', err);
+      setLogsLoading(false);
+    }
+  };
+
+  const handleTabChange = (tab) => {
+    setCurrentTab(tab);
+    if (tab === 'logs') {
+      fetchLogs(0);
+    }
+  };
+
   if (loading && !latestVitals) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
@@ -218,6 +314,14 @@ function App() {
         </Toolbar>
       </AppBar>
 
+      {/* Tab Navigation */}
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
+        <Tabs value={currentTab} onChange={(e, newValue) => handleTabChange(newValue)} centered>
+          <Tab label="Dashboard" value="dashboard" />
+          <Tab label="Packet Logs" value="logs" icon={<Article />} iconPosition="start" />
+        </Tabs>
+      </Box>
+
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -225,8 +329,100 @@ function App() {
           </Alert>
         )}
 
-        {/* Fall Alerts */}
-        {fallAlerts.length > 0 && (
+        {/* Dashboard Tab */}
+        {currentTab === 'dashboard' && (
+          <>
+            {/* EMERGENCY OVERLAY - Full screen alarm for fall/unconscious */}
+            {emergencyState && (
+              <Box
+                sx={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  bgcolor: emergencyState === 'unconscious' ? 'rgba(139, 0, 0, 0.95)' : 'rgba(211, 47, 47, 0.95)',
+                  zIndex: 9999,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  animation: 'pulse 1s infinite',
+                  '@keyframes pulse': {
+                    '0%, 100%': { opacity: 0.95 },
+                    '50%': { opacity: 1 },
+                  },
+                }}
+              >
+                <Warning sx={{ fontSize: 120, color: 'white', mb: 3, animation: 'shake 0.5s infinite' }} />
+                <Typography variant="h1" color="white" fontWeight="bold" sx={{ mb: 2, textShadow: '0 0 20px rgba(255,255,255,0.5)' }}>
+                  {emergencyState === 'unconscious' ? '⚠️ UNCONSCIOUS' : '🚨 FALL DETECTED'}
+                </Typography>
+                <Typography variant="h3" color="white" sx={{ mb: 1 }}>
+                  Device: {selectedDevice}
+                </Typography>
+                <Typography variant="h4" color="white" sx={{ mb: 4, opacity: 0.9 }}>
+                  {emergencyState === 'unconscious' 
+                    ? 'PATIENT NOT MOVING - IMMEDIATE ATTENTION REQUIRED!' 
+                    : 'FALL EVENT DETECTED - CHECK PATIENT STATUS'}
+                </Typography>
+                
+                {latestVitals && (
+                  <Box sx={{ bgcolor: 'rgba(255,255,255,0.1)', p: 4, borderRadius: 2, mb: 4 }}>
+                    <Grid container spacing={3} sx={{ color: 'white' }}>
+                      <Grid item xs={4}>
+                        <Typography variant="h6">Heart Rate</Typography>
+                        <Typography variant="h3">{latestVitals.heart_rate} BPM</Typography>
+                      </Grid>
+                      <Grid item xs={4}>
+                        <Typography variant="h6">Body Temp</Typography>
+                        <Typography variant="h3">{parseFloat(latestVitals.body_temperature).toFixed(1)}°C</Typography>
+                      </Grid>
+                      <Grid item xs={4}>
+                        <Typography variant="h6">Fall State</Typography>
+                        <Typography variant="h3">{getFallStateText(latestVitals.fall_state)}</Typography>
+                      </Grid>
+                    </Grid>
+                  </Box>
+                )}
+
+                <Box sx={{ display: 'flex', gap: 2 }}>
+                  <Button 
+                    variant="contained" 
+                    size="large"
+                    onClick={handleDismissEmergency}
+                    sx={{ 
+                      bgcolor: 'white', 
+                      color: 'error.main',
+                      fontSize: '1.5rem',
+                      px: 6,
+                      py: 2,
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.9)' },
+                    }}
+                  >
+                    DISMISS ALARM
+                  </Button>
+                  <Button 
+                    variant="outlined" 
+                    size="large"
+                    onClick={handleAcknowledgeAlerts}
+                    sx={{ 
+                      borderColor: 'white',
+                      color: 'white',
+                      fontSize: '1.5rem',
+                      px: 6,
+                      py: 2,
+                      '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.1)' },
+                    }}
+                  >
+                    ACKNOWLEDGE
+                  </Button>
+                </Box>
+              </Box>
+            )}
+
+            {/* Fall Alerts Banner (shown when not in emergency mode) */}
+            {fallAlerts.length > 0 && !emergencyState && (
           <Alert 
             severity="error" 
             icon={<Warning />} 
@@ -326,11 +522,24 @@ function App() {
 
           {/* Fall Status */}
           <Grid item xs={12} sm={6} md={3}>
-            <Card>
+            <Card 
+              sx={{ 
+                border: (latestVitals?.fall_state >= 2) ? '3px solid' : 'none',
+                borderColor: latestVitals?.fall_state === 3 ? 'error.dark' : 'error.main',
+                bgcolor: latestVitals?.fall_state === 3 ? 'error.50' : latestVitals?.fall_state === 2 ? 'warning.50' : 'inherit',
+                animation: (latestVitals?.fall_state >= 2) ? 'borderPulse 1s infinite' : 'none',
+                '@keyframes borderPulse': {
+                  '0%, 100%': { boxShadow: '0 0 0 0 rgba(211, 47, 47, 0.7)' },
+                  '50%': { boxShadow: '0 0 0 10px rgba(211, 47, 47, 0)' },
+                },
+              }}
+            >
               <CardContent>
                 <Box display="flex" alignItems="center" justifyContent="space-between">
                   {latestVitals?.fall_state === 0 ? (
                     <CheckCircle color="success" sx={{ fontSize: 40 }} />
+                  ) : latestVitals?.fall_state === 3 ? (
+                    <Warning color="error" sx={{ fontSize: 40, animation: 'shake 0.5s infinite' }} />
                   ) : (
                     <Warning color="error" sx={{ fontSize: 40 }} />
                   )}
@@ -338,13 +547,20 @@ function App() {
                     <Typography color="textSecondary" variant="caption">
                       Fall Status
                     </Typography>
-                    <Typography variant="h6">
+                    <Typography 
+                      variant="h6" 
+                      sx={{ 
+                        fontWeight: latestVitals?.fall_state >= 2 ? 'bold' : 'normal',
+                        color: latestVitals?.fall_state === 3 ? 'error.dark' : 'inherit'
+                      }}
+                    >
                       {getFallStateText(latestVitals?.fall_state)}
                     </Typography>
                     <Chip 
                       label={getFallStateText(latestVitals?.fall_state)}
                       color={getFallStateColor(latestVitals?.fall_state)}
                       size="small"
+                      sx={{ fontWeight: latestVitals?.fall_state >= 2 ? 'bold' : 'normal' }}
                     />
                   </Box>
                 </Box>
@@ -565,6 +781,123 @@ function App() {
             Last updated: {latestVitals?.timestamp ? format(new Date(latestVitals.timestamp), 'PPpp') : 'N/A'}
           </Typography>
         </Box>
+          </>
+        )}
+
+        {/* Logs Tab */}
+        {currentTab === 'logs' && (
+          <Card>
+            <CardContent>
+              <Typography variant="h5" gutterBottom>
+                📦 Packet Logs - {selectedDevice}
+              </Typography>
+              <Typography variant="body2" color="textSecondary" gutterBottom>
+                Total packets: {logsTotal} | Showing: {logs.length}
+              </Typography>
+              
+              {logsLoading ? (
+                <Box display="flex" justifyContent="center" p={4}>
+                  <CircularProgress />
+                </Box>
+              ) : (
+                <>
+                  <TableContainer component={Paper} sx={{ mt: 2 }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell><strong>Timestamp</strong></TableCell>
+                          <TableCell><strong>Device ID</strong></TableCell>
+                          <TableCell align="center"><strong>Type</strong></TableCell>
+                          <TableCell align="center"><strong>Frame #</strong></TableCell>
+                          <TableCell align="center"><strong>Size</strong></TableCell>
+                          <TableCell align="center"><strong>RSSI</strong></TableCell>
+                          <TableCell><strong>Raw Data (Hex)</strong></TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {logs.map((log) => (
+                          <TableRow 
+                            key={log.id}
+                            sx={{ 
+                              '&:hover': { bgcolor: 'action.hover' },
+                              bgcolor: log.packet_type === 3 ? 'error.50' : 'inherit'
+                            }}
+                          >
+                            <TableCell>
+                              <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                                {format(new Date(log.timestamp), 'MM/dd HH:mm:ss')}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>
+                              <Chip label={log.device_id} size="small" variant="outlined" />
+                            </TableCell>
+                            <TableCell align="center">
+                              <Chip 
+                                label={
+                                  log.packet_type === 1 ? 'Realtime' : 
+                                  log.packet_type === 2 ? 'ECG' : 
+                                  log.packet_type === 3 ? 'Fall Event' : 
+                                  'Unknown'
+                                }
+                                color={
+                                  log.packet_type === 1 ? 'primary' : 
+                                  log.packet_type === 2 ? 'info' : 
+                                  log.packet_type === 3 ? 'error' : 
+                                  'default'
+                                }
+                                size="small"
+                              />
+                            </TableCell>
+                            <TableCell align="center">
+                              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                                {log.frame_counter}
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="center">
+                              <Typography variant="caption">
+                                {log.data_length} bytes
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="center">
+                              <Chip 
+                                label={`${log.rssi} dBm`}
+                                size="small"
+                                color={log.rssi > -70 ? 'success' : log.rssi > -90 ? 'warning' : 'error'}
+                                variant="outlined"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Typography 
+                                variant="caption" 
+                                sx={{ 
+                                  fontFamily: 'monospace',
+                                  fontSize: '0.7rem',
+                                  wordBreak: 'break-all'
+                                }}
+                              >
+                                {log.raw_data ? Buffer.from(log.raw_data).toString('hex').substring(0, 60) : 'N/A'}
+                                {log.raw_data && Buffer.from(log.raw_data).toString('hex').length > 60 ? '...' : ''}
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                  
+                  <TablePagination
+                    component="div"
+                    count={logsTotal}
+                    page={logsPage}
+                    onPageChange={(e, newPage) => fetchLogs(newPage)}
+                    rowsPerPage={50}
+                    rowsPerPageOptions={[50]}
+                  />
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </Container>
 
       {/* Snackbar for notifications */}
