@@ -110,7 +110,17 @@ def parse_packet(data):
     
     try:
         # Extract header
-        device_id = data[0:10].decode('utf-8').rstrip('\x00')
+        # Device ID may not be valid UTF-8, try to decode, fallback to hex
+        try:
+            # Decode and remove all null bytes (not just trailing ones)
+            device_id = data[0:10].decode('utf-8', errors='ignore').replace('\x00', '').strip()
+            if not device_id:  # If empty after removing nulls, use hex
+                device_id = data[0:10].hex()
+        except UnicodeDecodeError:
+            # If not valid UTF-8, use hex representation
+            device_id = data[0:10].hex()
+            print(f"⚠️  Device ID not UTF-8, using hex: {device_id}")
+        
         frame_counter = int.from_bytes(data[10:12], byteorder='little')
         port = data[12]
         payload = data[13:]
@@ -128,6 +138,7 @@ def parse_packet(data):
         }
     except Exception as e:
         print(f"❌ Error parsing packet: {e}")
+        print(f"   Raw data (first 20 bytes): {data[:20].hex()}")
         return None
 
 def send_to_server(packet_info, rssi=-100, snr=0):
@@ -203,6 +214,8 @@ def read_lora_packets():
     print("="*60 + "\n")
     
     buffer = bytearray()
+    consecutive_failures = 0
+    MAX_CONSECUTIVE_FAILURES = 10
     
     while running:
         try:
@@ -213,54 +226,110 @@ def read_lora_packets():
                 if first_byte == b'\xAA':
                     # Start of LoRa packet frame
                     # Format: [0xAA][LEN][RSSI][SNR][DATA...][0x55]
-                    if ser.in_waiting >= 3:
-                        length = ord(ser.read(1))
-                        rssi_encoded = ord(ser.read(1))
-                        snr_encoded = ord(ser.read(1))
+                    
+                    # Read header bytes with short timeout
+                    header_data = ser.read(3) if ser.in_waiting >= 3 else b''
+                    
+                    # If not enough bytes yet, wait briefly
+                    if len(header_data) < 3:
+                        time.sleep(0.05)
+                        header_data += ser.read(3 - len(header_data))
+                    
+                    if len(header_data) == 3:
+                        length = header_data[0]
+                        rssi_encoded = header_data[1]
+                        snr_encoded = header_data[2]
                         
-                        # Wait for complete packet
-                        packet_data = ser.read(length)
-                        end_marker = ser.read(1)
+                        # Validate length (reasonable packet size)
+                        if length < 13 or length > 255:
+                            print(f"⚠️  Invalid packet length: {length}")
+                            consecutive_failures += 1
+                            continue
                         
-                        if end_marker == b'\x55' and len(packet_data) == length:
-                            # Decode RSSI/SNR
-                            rssi = rssi_encoded - 150
-                            snr = snr_encoded - 20
+                        # Wait for complete packet data + end marker
+                        bytes_needed = length + 1
+                        packet_data = b''
+                        timeout_counter = 0
+                        
+                        while len(packet_data) < bytes_needed and timeout_counter < 300:
+                            available = ser.in_waiting
+                            if available > 0:
+                                chunk = ser.read(min(available, bytes_needed - len(packet_data)))
+                                packet_data += chunk
+                            else:
+                                time.sleep(0.01)
+                                timeout_counter += 1
+                        
+                        if len(packet_data) == bytes_needed:
+                            # Split data and end marker
+                            data_bytes = packet_data[:-1]
+                            end_marker = packet_data[-1:]
                             
-                            # Parse packet
-                            packet_info = parse_packet(bytes(packet_data))
-                            if packet_info:
-                                stats['packets_received'] += 1
-                                stats['last_packet_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            if end_marker == b'\x55' and len(data_bytes) == length:
+                                # Decode RSSI/SNR
+                                rssi = rssi_encoded - 150
+                                snr = snr_encoded - 20
                                 
-                                print(f"\n📦 Packet #{stats['packets_received']}")
-                                print(f"   Device: {packet_info['device_id']}")
-                                print(f"   Type: {packet_info['packet_type_name']} (Port {packet_info['packet_type']})")
-                                print(f"   Frame: {packet_info['frame_counter']}")
-                                print(f"   RSSI: {rssi} dBm, SNR: {snr} dB")
-                                print(f"   Size: {packet_info['payload_length']} bytes")
+                                # Reset failure counter on success
+                                consecutive_failures = 0
                                 
-                                # Add RSSI/SNR to packet info
-                                packet_info['rssi'] = rssi
-                                
-                                # Send to server
-                                send_to_server(packet_info)
-                                
-                                # Send time sync after each packet
-                                send_time_sync()
+                                # Parse packet
+                                packet_info = parse_packet(data_bytes)
+                                if packet_info:
+                                    stats['packets_received'] += 1
+                                    stats['last_packet_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                    
+                                    print(f"\n📦 Packet #{stats['packets_received']}")
+                                    print(f"   Device: {packet_info['device_id']}")
+                                    print(f"   Type: {packet_info['packet_type_name']} (Port {packet_info['packet_type']})")
+                                    print(f"   Frame: {packet_info['frame_counter']}")
+                                    print(f"   RSSI: {rssi} dBm, SNR: {snr} dB")
+                                    print(f"   Size: {packet_info['payload_length']} bytes")
+                                    
+                                    # Show payload hex for debugging
+                                    if packet_info['packet_type'] == 3:
+                                        print(f"   🚨 FALL EVENT DETECTED!")
+                                        print(f"   Payload (hex): {packet_info['payload'].hex()}")
+                                    
+                                    # Add RSSI/SNR to packet info
+                                    packet_info['rssi'] = rssi
+                                    
+                                    # Send to server
+                                    send_to_server(packet_info)
+                                    
+                                    # Send time sync after each packet
+                                    send_time_sync()
+                            else:
+                                print(f"⚠️  Invalid packet frame (end={end_marker.hex() if end_marker else 'empty'})")
+                                consecutive_failures += 1
                         else:
-                            print(f"⚠️  Invalid packet frame (len={len(packet_data)}, end={end_marker.hex()})")
-                else:
-                    # Unknown byte, discard
+                            print(f"⚠️  Timeout waiting for packet data (got {len(packet_data)}/{bytes_needed})")
+                            consecutive_failures += 1
+                    else:
+                        print(f"⚠️  Could not read header (got {len(header_data)}/3 bytes)")
+                        consecutive_failures += 1
+                        
+                elif first_byte == b'\x55':
+                    # Orphaned end marker - we're out of sync
+                    # This is normal on startup, ignore silently unless it persists
                     pass
+                else:
+                    # Unknown byte - could be noise or we're mid-packet
+                    pass
+                
+                # If too many failures, clear buffer to resync
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    print("⚠️  Too many packet failures, resynchronizing...")
+                    ser.reset_input_buffer()
+                    consecutive_failures = 0
+                    time.sleep(0.5)
             
-            time.sleep(0.01)
+            time.sleep(0.005)  # Reduced from 0.01 for faster response
             
         except serial.SerialException as e:
             print(f"❌ UART error: {e}")
             stats['errors'] += 1
             print("   🔄 Attempting to reconnect...")
-            running = False  # Stop the loop to prevent further errors
             try:
                 if ser and ser.is_open:
                     ser.close()
@@ -277,11 +346,9 @@ def read_lora_packets():
                 ser.reset_input_buffer()
                 ser.reset_output_buffer()
                 print("   ✅ Reconnected successfully")
-                running = True  # Resume the loop
             except Exception as reconnect_error:
                 print(f"   ❌ Reconnection failed: {reconnect_error}")
                 time.sleep(5)
-                break  # Exit the loop if reconnection fails
         except KeyboardInterrupt:
             break
         except OSError as e:
@@ -290,7 +357,6 @@ def read_lora_packets():
                 print("   This usually means the UART device disconnected or has hardware issues")
                 print("   🔄 Attempting to reconnect...")
                 stats['errors'] += 1
-                running = False  # Stop the loop to prevent further errors
                 try:
                     if ser and ser.is_open:
                         ser.close()
@@ -307,7 +373,6 @@ def read_lora_packets():
                     ser.reset_input_buffer()
                     ser.reset_output_buffer()
                     print("   ✅ Reconnected successfully")
-                    running = True  # Resume the loop
                 except Exception as reconnect_error:
                     print(f"   ❌ Reconnection failed: {reconnect_error}")
                     print("   Please check:")
@@ -315,7 +380,6 @@ def read_lora_packets():
                     print("   2. Power to Vision Master E213")
                     print("   3. UART is enabled: sudo raspi-config")
                     time.sleep(5)
-                    break  # Exit the loop if reconnection fails
             else:
                 print(f"❌ OS Error: {e}")
                 stats['errors'] += 1

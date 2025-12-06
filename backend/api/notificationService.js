@@ -51,8 +51,11 @@ async function sendTelegramNotification(message) {
     try {
       const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
       
+      // Convert chatId to integer to fix Telegram API 400 error
+      const chatIdNum = parseInt(chatId.trim(), 10);
+      
       const response = await axios.post(url, {
-        chat_id: chatId.trim(),
+        chat_id: chatIdNum,
         text: message,
         parse_mode: 'Markdown',
         disable_web_page_preview: true

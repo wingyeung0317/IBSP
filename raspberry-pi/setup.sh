@@ -45,6 +45,25 @@ echo "[4/8] Configuring UART..."
 sudo raspi-config nonint do_serial 1  # Disable serial console
 sudo raspi-config nonint set_config_var enable_uart 1 /boot/config.txt
 
+# Disable serial console in boot parameters
+echo "Disabling serial console in boot config..."
+if [ -f /boot/firmware/cmdline.txt ]; then
+    sudo cp /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.bak
+    sudo sed -i 's/console=serial0,[0-9]* //g' /boot/firmware/cmdline.txt
+    echo "✅ Removed serial console from /boot/firmware/cmdline.txt"
+elif [ -f /boot/cmdline.txt ]; then
+    sudo cp /boot/cmdline.txt /boot/cmdline.txt.bak
+    sudo sed -i 's/console=serial0,[0-9]* //g' /boot/cmdline.txt
+    echo "✅ Removed serial console from /boot/cmdline.txt"
+fi
+
+# Disable getty on ttyS0
+echo "Disabling getty service on ttyS0..."
+sudo systemctl stop serial-getty@ttyS0.service 2>/dev/null || true
+sudo systemctl disable serial-getty@ttyS0.service 2>/dev/null || true
+sudo systemctl mask serial-getty@ttyS0.service 2>/dev/null || true
+echo "✅ Getty service disabled on ttyS0"
+
 # Add user to dialout group for UART access
 echo "[5/8] Setting permissions..."
 sudo usermod -a -G dialout $USER
@@ -74,7 +93,7 @@ echo "[7/8] Installing systemd service..."
 sudo tee /etc/systemd/system/lora-receiver.service > /dev/null <<EOF
 [Unit]
 Description=LoRa UART Receiver for Health Monitor
-After=network.target docker.service
+After=network.target docker.service docker-compose-app.service
 
 [Service]
 Type=simple
@@ -95,12 +114,42 @@ sudo systemctl daemon-reload
 
 # Docker setup
 echo "[8/8] Setting up Docker containers..."
+
+# Enable Docker to start on boot
+echo "Enabling Docker service..."
+sudo systemctl enable docker
+sudo systemctl start docker
+
 if [ -d "backend" ]; then
     cd backend
     
     # Start Docker containers
     echo "Starting Docker containers..."
     docker-compose up -d
+    
+    # Enable Docker Compose to start on boot (create systemd service)
+    echo "Creating Docker Compose systemd service..."
+    sudo tee /etc/systemd/system/docker-compose-app.service > /dev/null <<DOCKEREOF
+[Unit]
+Description=Docker Compose Application Service
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$HOME/IBSP/backend
+ExecStart=/usr/bin/docker-compose up -d
+ExecStop=/usr/bin/docker-compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+DOCKEREOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable docker-compose-app.service
+    echo "✅ Docker Compose will start automatically on boot"
     
     # Wait for containers to be healthy
     echo "Waiting for containers to start..."
