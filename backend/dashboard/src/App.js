@@ -49,7 +49,7 @@ import axios from 'axios';
 import { format } from 'date-fns';
 import './App.css';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://192.168.1.137:5000';
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
 function App() {
   const [devices, setDevices] = useState([]);

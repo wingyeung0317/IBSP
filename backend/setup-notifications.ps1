@@ -108,9 +108,9 @@ Write-Host "  2. Restart Docker containers:" -ForegroundColor White
 Write-Host "     docker-compose down" -ForegroundColor Cyan
 Write-Host "     docker-compose up -d --build" -ForegroundColor Cyan
 Write-Host "  3. Check service status:" -ForegroundColor White
-Write-Host "     curl http://192.168.1.137:5000/api/notifications/status" -ForegroundColor Cyan
+Write-Host "     curl http://YOUR_SERVER_IP:5000/api/notifications/status" -ForegroundColor Cyan
 Write-Host "  4. Send test notification:" -ForegroundColor White
-Write-Host "     curl -X POST http://192.168.1.137:5000/api/notifications/test" -ForegroundColor Cyan
+Write-Host "     curl -X POST http://YOUR_SERVER_IP:5000/api/notifications/test" -ForegroundColor Cyan
 Write-Host "`nFor detailed setup instructions, see NOTIFICATION_SETUP.md`n" -ForegroundColor Yellow
 
 Write-Host "Press any key to exit..." -ForegroundColor Gray

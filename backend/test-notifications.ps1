@@ -3,8 +3,26 @@
 # This script tests all configured notification channels
 
 param(
-    [string]$ServerUrl = "http://192.168.1.137:5000"
+    [string]$ServerUrl
 )
+
+# Load SERVER_IP from .env if not provided
+if (-not $ServerUrl) {
+    if (Test-Path ".env") {
+        $envContent = Get-Content ".env" | Where-Object { $_ -match '^SERVER_IP=' }
+        if ($envContent) {
+            $serverIp = ($envContent -split '=')[1]
+            $ServerUrl = "http://${serverIp}:5000"
+            Write-Host "Loaded SERVER_IP from .env: $serverIp" -ForegroundColor Green
+        } else {
+            $ServerUrl = "http://localhost:5000"
+            Write-Host "SERVER_IP not found in .env, using localhost" -ForegroundColor Yellow
+        }
+    } else {
+        $ServerUrl = "http://localhost:5000"
+        Write-Host ".env file not found, using localhost" -ForegroundColor Yellow
+    }
+}
 
 Write-Host "`n===========================================================" -ForegroundColor Cyan
 Write-Host "  Notification Services Test" -ForegroundColor Cyan

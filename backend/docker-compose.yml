@@ -4,11 +4,11 @@ services:
     image: postgres:15-alpine
     container_name: health-monitor-db
     environment:
-      POSTGRES_USER: healthmonitor
-      POSTGRES_PASSWORD: healthpass123
-      POSTGRES_DB: health_monitoring
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     ports:
-      - "5432:5432"
+      - "${DB_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -27,35 +27,35 @@ services:
       dockerfile: Dockerfile
     container_name: health-monitor-api
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV}
       PORT: 3000
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_USER: healthmonitor
-      DB_PASSWORD: healthpass123
-      DB_NAME: health_monitoring
-      CORS_ORIGIN: http://192.168.1.137:5001
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      CORS_ORIGIN: ${CORS_ORIGIN}
       # Alert Thresholds
-      HEART_RATE_MIN: 50
-      HEART_RATE_MAX: 120
-      BODY_TEMP_MIN: 36.0
-      BODY_TEMP_MAX: 38.0
-      NOISE_THRESHOLD: 200
+      HEART_RATE_MIN: ${HEART_RATE_MIN}
+      HEART_RATE_MAX: ${HEART_RATE_MAX}
+      BODY_TEMP_MIN: ${BODY_TEMP_MIN}
+      BODY_TEMP_MAX: ${BODY_TEMP_MAX}
+      NOISE_THRESHOLD: ${NOISE_THRESHOLD}
       # Telegram Configuration
-      TELEGRAM_ENABLED: "true"
-      TELEGRAM_BOT_TOKEN: "8426773013:AAFOjZBe8HsLRiJXMJwUQyoOPHdl_H4lrr8"
-      TELEGRAM_CHAT_IDS: "7410980118"
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_IDS: ${TELEGRAM_CHAT_IDS}
       # Discord Configuration
-      DISCORD_ENABLED: "false"
-      DISCORD_WEBHOOK_URLS: ""
+      DISCORD_ENABLED: ${DISCORD_ENABLED}
+      DISCORD_WEBHOOK_URLS: ${DISCORD_WEBHOOK_URLS}
       # WhatsApp Configuration (Twilio)
-      WHATSAPP_ENABLED: "false"
-      TWILIO_ACCOUNT_SID: ""
-      TWILIO_AUTH_TOKEN: ""
-      TWILIO_WHATSAPP_FROM: ""
-      WHATSAPP_TO_NUMBERS: ""
+      WHATSAPP_ENABLED: ${WHATSAPP_ENABLED}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM}
+      WHATSAPP_TO_NUMBERS: ${WHATSAPP_TO_NUMBERS}
     ports:
-      - "5000:3000"
+      - "${API_PORT}:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,10 +73,10 @@ services:
       dockerfile: Dockerfile
     container_name: health-monitor-dashboard
     environment:
-      REACT_APP_API_URL: http://192.168.1.137:5000
+      REACT_APP_API_URL: ${REACT_APP_API_URL}
       PORT: 3001
     ports:
-      - "5001:3001"
+      - "${DASHBOARD_PORT}:3001"
     depends_on:
       - api
     networks:
