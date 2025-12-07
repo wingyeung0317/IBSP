@@ -26,15 +26,20 @@ import base64
 import time
 import sys
 import signal
+import os
 from datetime import datetime
 
+# ============================================================================
 # Configuration
+# ============================================================================
 UART_PORT = '/dev/ttyS0'  # Change to /dev/ttyAMA0 if using Raspberry Pi 3/4
 UART_BAUDRATE = 115200
 UART_TIMEOUT = 1
 
-# Backend server URL (running in Docker on same Raspberry Pi)
-SERVER_URL = 'http://192.168.1.137:5000/api/sensor-data'
+# Backend server configuration (use environment variables)
+SERVER_IP = os.getenv('SERVER_IP', 'localhost')  # Default to localhost
+SERVER_PORT = os.getenv('SERVER_PORT', '5000')
+SERVER_URL = f'http://{SERVER_IP}:{SERVER_PORT}/api/sensor-data'
 
 # Global variables
 ser = None

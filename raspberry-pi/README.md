@@ -27,6 +27,7 @@ Docker: Node.js Backend + PostgreSQL + Dashboard
 
 - `uart_lora_receiver.py` - Python script to receive LoRa packets via UART
 - `setup.sh` - Automated setup script for Raspberry Pi
+- `.env.example` - Environment configuration template
 - `VISION_MASTER_SETUP.md` - Detailed configuration guide
 - `test_uart.py` - UART testing utility
 - `requirements.txt` - Python dependencies
@@ -52,6 +53,10 @@ cd ~
 git clone <your-repo-url> IBSP
 cd IBSP/raspberry-pi
 
+# Configure environment variables
+cp .env.example .env
+nano .env  # Edit and set your SERVER_IP
+
 # Run setup script
 chmod +x setup.sh
 ./setup.sh
@@ -63,8 +68,9 @@ sudo reboot
 ### 3. Test Reception
 
 ```bash
-# Manual test
+# Manual test (load environment variables first)
 cd ~/IBSP/raspberry-pi
+source .env
 python3 uart_lora_receiver.py
 
 # You should see output like:
