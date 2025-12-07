@@ -1992,6 +1992,11 @@ const uint8_t LORA_SYNC_WORD = 0x12;    // Sync word (0x12 = private network)
 // SX1262 LoRa module instance
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_NRST, LORA_BUSY);
 
+// UART pins for Vision Master E290 communication
+const int PIN_UART_TX = 43;  // Connect to Vision Master E290 RX (pin 44)
+const int PIN_UART_RX = 44;  // Connect to Vision Master E290 TX (pin 43)
+const int UART_BAUD = 115200;
+
 class LoRaComm {
 private:
   bool initialized;
@@ -2327,6 +2332,26 @@ private:
 };
 
 // ============================================================================
+// UART COMMUNICATION TO VISION MASTER E290
+// ============================================================================
+
+/**
+ * Send realtime data packet to Vision Master E290 via UART
+ * Uses same packet format as LoRa for consistency
+ */
+void sendUARTPacket(uint8_t* payload, int len) {
+  if (len > 0 && len <= 255) {
+    // Send packet via UART (Serial1)
+    Serial1.write(payload, len);
+    Serial1.flush();
+    
+    Serial.println("📤 Sent to Vision Master E290 via UART");
+    Serial.print("   Bytes: ");
+    Serial.println(len);
+  }
+}
+
+// ============================================================================
 // Configuration Constants
 // ============================================================================
 
@@ -2582,6 +2607,21 @@ void setup() {
   Serial.println("\n========================================");
   Serial.println("  ALL SYSTEMS READY");
   Serial.println("========================================");
+  
+  // ========================================
+  // UART Initialization for Vision Master E290
+  // ========================================
+  
+  Serial.println("\nInitializing UART for Vision Master E290...");
+  Serial1.begin(UART_BAUD, SERIAL_8N1, PIN_UART_RX, PIN_UART_TX);
+  Serial.print("UART configured: TX=");
+  Serial.print(PIN_UART_TX);
+  Serial.print(", RX=");
+  Serial.print(PIN_UART_RX);
+  Serial.print(", Baud=");
+  Serial.println(UART_BAUD);
+  Serial.println("✅ UART ready for staff badge communication!");
+  Serial.println("========================================\n");
   
   Serial.println("\n📡 TRANSMISSION SCHEDULE (Optimized for HK Regulations):");
   Serial.println("  ┌─────────────────────────────────────────┐");
@@ -2969,6 +3009,9 @@ void loop() {
       Serial.print("°C  Noise: ");
       Serial.print(noiseToSend, 1);
       Serial.println("dB");
+      
+      // Send same packet to Vision Master E290 via UART for badge display
+      sendUARTPacket(payload, len);
     } else {
       Serial.println("❌ Failed to send immediate packet");
     }
